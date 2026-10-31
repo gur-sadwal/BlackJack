@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Build-Ausgabe (scripts/build-ipa.sh) – die IPA liegt in den GitHub Releases
+build/
+*.ipa
+
+# Lokale Dateien, die nicht veröffentlicht werden
+Private/
