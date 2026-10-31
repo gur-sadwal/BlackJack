@@ -12,7 +12,7 @@ some notable things to say:
 * chips scale with your balance; broke? 60 min cooldown, then +€500 once a day
 * 3 decks: classic, blue and pro (my own zebra / medallion design)
 * no ads, no tracking, no purchases. play money only
-* app ~2 mb, save game a few hundred bytes
+* lightweight app with local save data
 
 ## lobby
 
@@ -28,6 +28,16 @@ some notable things to say:
 ## profile
 
 <img src="docs/mockups/profile-decks.png" alt="decks" width="220"/>
+
+## 1.1 update
+
+* larger cards, including split hands, with fixed-size controls
+* calmer dealing, dealer animations and result pauses
+* text stays readable; the voice option has been removed
+* progress survives normal updates; resetting it is an explicit option
+* app icon included, plus repeatable game checks and a stricter IPA build
+
+Developer notes and optional dialogue format: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## install
 

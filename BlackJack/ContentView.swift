@@ -3,13 +3,12 @@
 //  BlackJack
 //
 //  Werbefreies Blackjack in Euro (€) – die komplette App in einer Datei.
-//  Zero-Asset-Policy: Karten, Jetons, Tische, Räume und Porträts sind reine
-//  SwiftUI-Vektoren bzw. SF Symbols. Persistiert werden nur Int/Double/String/Bool
+//  Karten, Jetons und Tische sind SwiftUI-Vektoren; kleine Bilder liegen im Bundle.
+//  Persistiert werden nur Int/Double/String/Bool
 //  über @AppStorage (wenige hundert Byte).
 //
 
 import SwiftUI
-import AVFoundation
 import AudioToolbox
 import ImageIO
 
@@ -30,6 +29,29 @@ private enum Rules {
     static let cooldown: TimeInterval = 60 * 60   // Pleiteschutz: 60 Minuten
     static let reshuffleBelow = 15                // Neu mischen unter 15 Karten
     static let maxHands = 4                       // bis zu 3× splitten
+}
+
+/// Pausen gehören zum Spielablauf; eine Animation darf nicht von der nächsten Aktion überholt werden.
+private enum Pacing {
+    static let cardAnimation = 0.5
+    static let opening: Duration = .milliseconds(350)
+    static let card: Duration = .milliseconds(550)
+    static let handSwitch: Duration = .milliseconds(350)
+    static let dealerOpening: Duration = .milliseconds(550)
+    static let dealerFlip: Duration = .milliseconds(850)
+    static let dealerCard: Duration = .milliseconds(850)
+    static let result: Duration = .milliseconds(1600)
+
+    static func readingTime(for text: String) -> Duration {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        let seconds = max(5, min(18, Double(words) / 2.8 + 1.5))
+        return .milliseconds(Int64(seconds * 1000))
+    }
+}
+
+private enum LadyPreference {
+    /// Die frühere Sprachoption wird beim Update zur Textoption.
+    static func normalized(_ value: Int) -> Int { value == 0 ? 0 : 1 }
 }
 
 private enum Key {
@@ -58,8 +80,19 @@ private enum Key {
     static let showValues = "showValues"
     static let sounds = "sounds"
     static let haptics = "haptics"
-    static let ladyMode = "ladyMode"              // 0 aus · 1 Text · 2 Stimme
+    static let ladyMode = "ladyMode"              // 0 aus · 1 Text
     static let afterDark = "afterDark"            // alternativer Modus (Standard: aus)
+}
+
+private enum ProgressStore {
+    static let keys = [Key.balance, Key.brokeSince, Key.lastRefillDay, Key.games, Key.wins,
+                       Key.losses, Key.pushes, Key.blackjacks, Key.splits, Key.doubles,
+                       Key.tips, Key.tipTotal, Key.streak, Key.bestStreak, Key.highest,
+                       Key.xp, Key.claimed, Key.venuesPlayed, Key.venue]
+
+    static func reset(in defaults: UserDefaults = .standard) {
+        for key in keys { defaults.removeObject(forKey: key) }
+    }
 }
 
 private enum Palette {
@@ -143,8 +176,6 @@ private func syncBroke(_ balance: inout Int, _ brokeSince: inout Double) {
 
 extension EnvironmentValues {
     @Entry var deckStyle: Int = 2
-    /// Skalierung des Tisch-Layouts für niedrige Displays (1 = iPhone 17).
-    @Entry var tableScale: CGFloat = 1
 }
 
 // MARK: - Fortschritt
@@ -276,21 +307,25 @@ final class Game {
     private(set) var bet = 0
     private(set) var lastBet = 0
     private(set) var dealtCount = 0               // Taktgeber für Sound
+    private(set) var isAnimating = false
 
     @ObservationIgnored var standOn21 = true
     /// Bucht das Rundenergebnis, sobald es feststeht (vor der Dealer-Animation).
     @ObservationIgnored var onSettle: ((Settlement) -> Void)?
     @ObservationIgnored private var shoe: [Int] = []
     @ObservationIgnored private var nextID = 0
+    @ObservationIgnored private var pause: @MainActor (Duration) async -> Void = {
+        try? await Task.sleep(for: $0)
+    }
 
-    private let dealSpring = Animation.spring(duration: 0.38, bounce: 0.18)
+    private let dealSpring = Animation.spring(duration: Pacing.cardAnimation, bounce: 0.12)
 
     init(minBet: Int) { self.minBet = minBet }
 
     var activeHand: Hand? {
         phase == .player && hands.indices.contains(active) ? hands[active] : nil
     }
-    var canDeal: Bool { phase.isIdle && bet >= minBet }
+    var canDeal: Bool { phase.isIdle && !isAnimating && bet >= minBet }
     var canDouble: Bool {
         guard let hand = activeHand else { return false }
         return hand.cards.count == 2 && !hand.splitAces
@@ -306,22 +341,22 @@ final class Game {
     // MARK: Einsatz
 
     func addChip(_ value: Int, limit: Int) {
-        guard phase == .betting, bet + value <= limit else { return }
+        guard phase == .betting, !isAnimating, bet + value <= limit else { return }
         bet += value
     }
 
     func setBet(_ value: Int) {
-        guard phase == .betting else { return }
+        guard phase == .betting, !isAnimating else { return }
         bet = max(0, value)
     }
 
     func clearBet() {
-        guard phase == .betting else { return }
+        guard phase == .betting, !isAnimating else { return }
         bet = 0
     }
 
     func prepareNextRound(keepBet: Bool, limit: Int) {
-        guard phase == .finished else { return }
+        guard phase == .finished, !isAnimating else { return }
         withAnimation(.easeOut(duration: 0.25)) {
             hands = []
             dealer = []
@@ -336,6 +371,8 @@ final class Game {
 
     func deal() async -> Settlement? {
         guard canDeal else { return nil }
+        isAnimating = true
+        defer { isAnimating = false }
         phase = .dealing
         lastBet = bet
         withAnimation(.easeOut(duration: 0.2)) {
@@ -347,43 +384,54 @@ final class Game {
         }
         if shoe.count < Rules.reshuffleBelow { shoe = Array(0..<52).shuffled() }
 
-        try? await Task.sleep(for: .milliseconds(240))
+        await pause(Pacing.opening)
         hands = [Hand(id: newID(), cards: [], bet: bet)]
         for i in 0..<4 {                          // Spieler, Dealer, Spieler, Dealer (verdeckt)
             withAnimation(dealSpring) {
                 if i % 2 == 0 { hands[0].cards.append(draw()) } else { dealer.append(draw()) }
             }
-            try? await Task.sleep(for: .milliseconds(300))
+            await pause(Pacing.card)
         }
 
-        if hands[0].isNatural || isNatural(dealer) { return finish() }
+        if hands[0].isNatural || isNatural(dealer) { return await finish() }
         phase = .player
         return nil
     }
 
     func hit() async -> Settlement? {
-        guard phase == .player, hands.indices.contains(active) else { return nil }
+        guard phase == .player, !isAnimating, hands.indices.contains(active) else { return nil }
+        isAnimating = true
+        defer { isAnimating = false }
         withAnimation(dealSpring) { hands[active].cards.append(draw()) }
+        await pause(Pacing.card)
         let score = hands[active].score
         if score.isBust || (standOn21 && score.total == 21) { return await advance() }
         return nil
     }
 
     func stand() async -> Settlement? {
-        guard phase == .player else { return nil }
+        guard phase == .player, !isAnimating else { return nil }
+        isAnimating = true
+        defer { isAnimating = false }
+        await pause(Pacing.handSwitch)
         return await advance()
     }
 
     func doubleDown() async -> Settlement? {
-        guard canDouble else { return nil }
+        guard canDouble, !isAnimating else { return nil }
+        isAnimating = true
+        defer { isAnimating = false }
         hands[active].bet *= 2
         hands[active].doubled = true
         withAnimation(dealSpring) { hands[active].cards.append(draw()) }
+        await pause(Pacing.card)
         return await advance()
     }
 
     func split() async -> Settlement? {
-        guard canSplit else { return nil }
+        guard canSplit, !isAnimating else { return nil }
+        isAnimating = true
+        defer { isAnimating = false }
         phase = .dealing
         let original = hands[active]
         let aces = original.cards[0].rank == 1
@@ -397,9 +445,9 @@ final class Game {
             hands[active] = left
             hands.insert(right, at: active + 1)
         }
-        try? await Task.sleep(for: .milliseconds(280))
+        await pause(Pacing.handSwitch)
         withAnimation(dealSpring) { hands[active].cards.append(draw()) }
-        try? await Task.sleep(for: .milliseconds(280))
+        await pause(Pacing.card)
         phase = .player
         if aces || (standOn21 && hands[active].score.total == 21) { return await advance() }
         return nil
@@ -428,11 +476,12 @@ final class Game {
             return await dealerTurn()
         }
         withAnimation(.snappy) { active = next }
+        await pause(Pacing.handSwitch)
         if hands[next].cards.count < 2 {          // zweite Karte nach Split
             phase = .dealing
-            try? await Task.sleep(for: .milliseconds(260))
+            await pause(Pacing.handSwitch)
             withAnimation(dealSpring) { hands[next].cards.append(draw()) }
-            try? await Task.sleep(for: .milliseconds(260))
+            await pause(Pacing.card)
             phase = .player
             if hands[next].splitAces || (standOn21 && hands[next].score.total == 21) {
                 return await advance()
@@ -455,22 +504,29 @@ final class Game {
         let early = onSettle
         early?(settlement)
 
-        try? await Task.sleep(for: .milliseconds(250))
-        withAnimation(.easeInOut(duration: 0.5)) { holeHidden = false }
-        try? await Task.sleep(for: .milliseconds(600))
+        await pause(Pacing.dealerOpening)
+        withAnimation(.easeInOut(duration: 0.65)) { holeHidden = false }
+        await pause(Pacing.dealerFlip)
         for card in final.dropFirst(dealer.count) {
             withAnimation(dealSpring) { dealer.append(card) }
             dealtCount &+= 1
-            try? await Task.sleep(for: .milliseconds(620))
+            await pause(Pacing.dealerCard)
         }
         show(resolved, outcome)
+        await pause(Pacing.result)
         return early == nil ? settlement : nil
     }
 
-    private func finish() -> Settlement {
+    private func finish() async -> Settlement? {
         let (settlement, resolved, outcome) = resolve(dealer)
+        let early = onSettle
+        early?(settlement)
+        await pause(Pacing.dealerOpening)
+        withAnimation(.easeInOut(duration: 0.65)) { holeHidden = false }
+        await pause(Pacing.dealerFlip)
         show(resolved, outcome)
-        return settlement
+        await pause(Pacing.result)
+        return early == nil ? settlement : nil
     }
 
     private func show(_ resolved: [Hand], _ outcome: Outcome) {
@@ -777,34 +833,6 @@ private struct LineBag {
     }
 }
 
-/// Optionale Sprachausgabe – wird erst beim ersten Gebrauch erzeugt.
-@MainActor
-private final class Voice {
-    static let shared = Voice()
-    private lazy var synth = AVSpeechSynthesizer()
-    private lazy var voice: AVSpeechSynthesisVoice? =
-        AVSpeechSynthesisVoice.speechVoices().first { $0.language == "en-GB" && $0.gender == .female }
-        ?? AVSpeechSynthesisVoice(language: "en-US")
-
-    /// Ambient: mischt sich mit laufender Musik und respektiert den Stummschalter.
-    private lazy var session: Void = {
-        try? AVAudioSession.sharedInstance().setCategory(.ambient)
-    }()
-
-    func say(_ text: String) {
-        _ = session
-        synth.stopSpeaking(at: .immediate)
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = voice
-        utterance.pitchMultiplier = 1.1
-        synth.speak(utterance)
-    }
-
-    func stop() {
-        synth.stopSpeaking(at: .immediate)
-    }
-}
-
 // MARK: - Erfolge
 
 private struct Stats {
@@ -922,7 +950,9 @@ struct ContentView: View {
     @AppStorage(Key.balance) private var balance = Rules.startBalance
     @AppStorage(Key.brokeSince) private var brokeSince = 0.0
     @AppStorage(Key.afterDark) private var afterDark = false
+    @AppStorage(Key.ladyMode) private var ladyMode = 1
     @State private var table: Int?
+    @State private var prepared = false
 
     var body: some View {
         ZStack {
@@ -940,6 +970,13 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .task {
+            if !prepared {
+                prepared = true
+                if ProcessInfo.processInfo.arguments.contains("--reset-progress") {
+                    ProgressStore.reset()
+                }
+                ladyMode = LadyPreference.normalized(ladyMode)
+            }
             syncBroke(&balance, &brokeSince)
             if Lines.night == nil { afterDark = false }   // ohne Datei kein alternativer Modus
             #if DEBUG
@@ -1319,6 +1356,8 @@ private struct TableScreen: View {
     @State private var greed: Int?                  // „Alles weg“-Betrag für die Animation
     @State private var heldCredit = 0
     @State private var pendingLine: String?
+    @State private var queuedLine: String?
+    @State private var isPerformingAction = false
 
     init(venue: Venue, leave: @escaping () -> Void) {
         self.venue = venue
@@ -1329,17 +1368,34 @@ private struct TableScreen: View {
     var body: some View {
         ZStack {
             TableBackground(venue: venue)
-            GeometryReader { geo in
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 topBar
                 if showLady {
-                    LadyStage(venue: venue, bubble: ladyMode == 0 ? nil : bubble, action: tapLady)
+                    LadyStage(venue: venue, game: game, haptics: haptics,
+                              bubble: ladyMode == 0 ? nil : bubble, action: tapLady)
+                        .disabled(isPerformingAction || game.isAnimating || bubble != nil)
+                } else {
+                    CenterStage(game: game, haptics: haptics)
                 }
-                DealerRow(game: game, showValue: showValues)
-                CenterStage(game: game, haptics: haptics)
-                PlayerHands(game: game, showValue: showValues)
-                Spacer(minLength: 0)
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        VStack(spacing: 12) {
+                            DealerRow(game: game, showValue: showValues).id("dealerHand")
+                            PlayerHands(game: game, showValue: showValues).id("playerHand")
+                        }
+                        .padding(.vertical, 6)
+                    }
+                    .scrollIndicators(.hidden)
+                    .onChange(of: game.phase) { _, phase in
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            if phase == .player { proxy.scrollTo("playerHand", anchor: .bottom) }
+                            if phase == .dealer { proxy.scrollTo("dealerHand", anchor: .top) }
+                            if phase == .finished { proxy.scrollTo("dealerHand", anchor: .top) }
+                        }
+                    }
+                }
                 controls
+                    .disabled(isPerformingAction || game.isAnimating)
                 HStack {
                     BalancePill(balance: balance - heldCredit)
                     Spacer()
@@ -1348,12 +1404,11 @@ private struct TableScreen: View {
                 .padding(.horizontal, 16)
                 if game.phase == .betting && balance >= venue.minBet {
                     ChipTray(game: game, balance: balance, haptics: haptics, sounds: sounds)
+                        .disabled(isPerformingAction || game.isAnimating)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .padding(.bottom, 4)
-            .environment(\.tableScale, min(1, max(0.7, geo.size.height / 780)))
-            }
             SoundTicker(game: game, enabled: sounds)
             if let greed {
                 GreedOverlay(venue: venue, amount: greed) {
@@ -1389,7 +1444,14 @@ private struct TableScreen: View {
         .onDisappear {
             game.onSettle = nil
             bubbleTask?.cancel()
-            Voice.shared.stop()
+            queuedLine = nil
+        }
+        .onChange(of: ladyMode) { _, mode in
+            if mode == 0 {
+                bubbleTask?.cancel()
+                bubble = nil
+                queuedLine = nil
+            }
         }
     }
 
@@ -1416,8 +1478,8 @@ private struct TableScreen: View {
                     .background(Color(white: 0.93), in: Circle())
             }
             .buttonStyle(PressStyle())
-            .disabled(!game.phase.isIdle)
-            .opacity(game.phase.isIdle ? 1 : 0.4)
+            .disabled(!game.phase.isIdle || isPerformingAction || game.isAnimating)
+            .opacity(game.phase.isIdle && !isPerformingAction && !game.isAnimating ? 1 : 0.4)
             .accessibilityLabel("Back to lobby")
 
             PlayerBadge(name: name, xp: xp, size: 46, subtitle: venue.city.capitalized)
@@ -1502,35 +1564,45 @@ private struct TableScreen: View {
 
     // MARK: Aktionen
 
-    private func run(_ operation: @escaping @MainActor () async -> Settlement?) {
+    private func run(_ operation: @escaping @MainActor () async -> Settlement?, prepare: () -> Void = {}) {
+        guard !isPerformingAction, !game.isAnimating else { return }
+        isPerformingAction = true
+        prepare()
         Task {
+            defer { isPerformingAction = false }
             if let settlement = await operation() { settle(settlement) }
         }
     }
 
     private func deal() {
         guard game.canDeal, game.bet <= balance else { return }
-        balance -= game.bet
-        tipStreak = 0
-        if Int.random(in: 0..<3) == 0 { say(lines(Lines.luck, { $0.luck }).randomElement() ?? "") }
-        run { await game.deal() }
+        run({ await game.deal() }, prepare: {
+            balance -= game.bet
+            tipStreak = 0
+            if bubble == nil && Int.random(in: 0..<3) == 0 {
+                say(lines(Lines.luck, { $0.luck }).randomElement() ?? "")
+            }
+        })
     }
 
     private func doubleDown() {
         guard game.canDouble, balance >= game.extraCost else { return }
-        balance -= game.extraCost
-        doubles += 1
-        run { await game.doubleDown() }
+        run({ await game.doubleDown() }, prepare: {
+            balance -= game.extraCost
+            doubles += 1
+        })
     }
 
     private func split() {
         guard game.canSplit, balance >= game.extraCost else { return }
-        balance -= game.extraCost
-        splits += 1
-        run { await game.split() }
+        run({ await game.split() }, prepare: {
+            balance -= game.extraCost
+            splits += 1
+        })
     }
 
     private func again() {
+        guard game.phase == .finished, !isPerformingAction, !game.isAnimating else { return }
         game.prepareNextRound(keepBet: true, limit: balance)
         if game.bet < venue.minBet { game.setBet(min(venue.minBet, balance)) }
         deal()
@@ -1581,6 +1653,7 @@ private struct TableScreen: View {
     /// Ein Tipp auf die Lady = Trinkgeld in Höhe des Tisch-Betrags. Im normalen Modus nimmt
     /// der fünfte Tipp in Folge (ohne gespielte Runde dazwischen) alles – inkl. gesetztem Einsatz.
     private func tapLady() {
+        guard !isPerformingAction, !game.isAnimating, bubble == nil else { return }
         if !afterDark && tipStreak >= 4 {
             if game.phase == .betting { game.clearBet() }
             let all = available
@@ -1623,13 +1696,22 @@ private struct TableScreen: View {
 
     private func say(_ text: String) {
         guard ladyMode != 0, !text.isEmpty else { return }
+        if bubble != nil {
+            queuedLine = text
+            return
+        }
         bubbleTask?.cancel()
-        withAnimation(.spring(duration: 0.35, bounce: 0.3)) { bubble = text }
-        if ladyMode == 2 { Voice.shared.say(text) }
+        withAnimation(.spring(duration: 0.5, bounce: 0.15)) { bubble = text }
         bubbleTask = Task {
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: Pacing.readingTime(for: text))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.3)) { bubble = nil }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            if let next = queuedLine {
+                queuedLine = nil
+                say(next)
+            }
         }
     }
 }
@@ -1712,20 +1794,21 @@ private struct ShoeView: View {
 
 private struct LadyStage: View {
     let venue: Venue
+    let game: Game
+    let haptics: Bool
     let bubble: String?
     let action: () -> Void
-    @Environment(\.tableScale) private var scale
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            ZStack {
+            VStack(spacing: 8) {
+                CenterStage(game: game, haptics: haptics)
                 if let bubble {
                     Text(bubble)
                         .font(Typo.ui(.footnote, .semibold))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.leading)
-                        .lineLimit(4)
-                        .minimumScaleFactor(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
                         .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1739,7 +1822,7 @@ private struct LadyStage: View {
 
             Button(action: action) {
                 LadyAvatar(lady: venue.lady, photo: venue.photo, accent: venue.accent)
-                    .frame(width: 86 * scale, height: 86 * scale)
+                    .frame(width: 86, height: 86)
                     .overlay(Circle().strokeBorder(
                         LinearGradient(colors: [Palette.gold, Palette.goldDeep], startPoint: .top, endPoint: .bottom),
                         lineWidth: 3))
@@ -1754,17 +1837,16 @@ private struct LadyStage: View {
                             .offset(x: 10, y: -2)
                     }
                     .overlay(alignment: .bottom) {
-                        NamePlate(name: venue.lady.name, icon: venue.plateIcon, height: 26 * scale)
+                        NamePlate(name: venue.lady.name, icon: venue.plateIcon, height: 26)
                             .fixedSize()
-                            .offset(y: 13 * scale)
+                            .offset(y: 13)
                     }
             }
             .buttonStyle(PressStyle())
             .accessibilityLabel("\(venue.lady.name), bar lady. Tap to tip \(eur(venue.tip))")
 
-            Color.clear.frame(maxWidth: .infinity)
         }
-        .frame(height: 112 * scale)
+        .frame(minHeight: 112)
         .padding(.horizontal, 12)
     }
 }
@@ -1871,7 +1953,7 @@ private struct GreedOverlay: View {
                     .offset(x: go ? 0 : CGFloat(i * 47 % 320) - 160,
                             y: go ? -150 : 420 + CGFloat(i % 5) * 26)
                     .opacity(go ? 0 : 1)
-                    .animation(.easeIn(duration: 0.85).delay(Double(i) * 0.045), value: go)
+                    .animation(.easeIn(duration: 1.1).delay(Double(i) * 0.055), value: go)
             }
             VStack(spacing: 12) {
                 LadyAvatar(lady: venue.lady, photo: venue.photo, accent: venue.accent)
@@ -2148,13 +2230,12 @@ private struct LadyPortrait: View {
 private struct DealerRow: View {
     let game: Game
     let showValue: Bool
-    @Environment(\.tableScale) private var scale
 
     var body: some View {
         let hidden = game.holeHidden && game.dealer.count > 1
         let visible = hidden ? Array(game.dealer.prefix(1)) : game.dealer
         VStack(spacing: 4) {
-            HandView(cards: game.dealer, hideSecond: game.holeHidden, cardWidth: 70 * scale,
+            HandView(cards: game.dealer, hideSecond: game.holeHidden, cardWidth: 104,
                      dealFrom: CGSize(width: 150, height: -60))
             ScoreTag(text: visible.isEmpty || !showValue ? nil : Score(visible).text + (hidden ? " + ?" : ""),
                      bust: Score(visible).isBust)
@@ -2166,7 +2247,6 @@ private struct DealerRow: View {
 private struct CenterStage: View {
     let game: Game
     let haptics: Bool
-    @Environment(\.tableScale) private var scale
 
     var body: some View {
         ZStack {
@@ -2197,7 +2277,7 @@ private struct CenterStage: View {
                 .transition(.scale.combined(with: .opacity))
             }
         }
-        .frame(height: 64 * scale)
+        .frame(height: 64)
         .sensoryFeedback(trigger: game.outcome?.verdict) { _, new in
             guard haptics else { return nil }
             switch new {
@@ -2228,52 +2308,63 @@ private struct CenterStage: View {
 private struct PlayerHands: View {
     let game: Game
     let showValue: Bool
-    @Environment(\.tableScale) private var scale
 
     var body: some View {
-        let base = 80 * scale
+        let cardWidth: CGFloat = 120
         GeometryReader { geo in
             let hands = game.hands
-            let count = max(hands.count, 1)
-            let spacing: CGFloat = 8
-            let column = (geo.size.width - spacing * CGFloat(count - 1)) / CGFloat(count)
-            let cardWidth: CGFloat = count == 1 ? base : min(base * 0.8, column * 0.62)
-
-            HStack(alignment: .top, spacing: spacing) {
-                if hands.isEmpty {
-                    HandView(cards: [], hideSecond: false, cardWidth: base, dealFrom: .zero)
-                } else {
-                    ForEach(Array(hands.enumerated()), id: \.element.id) { index, hand in
-                        let isActive = game.phase == .player && index == game.active && hands.count > 1
-                        VStack(spacing: 4) {
-                            HandView(cards: hand.cards, hideSecond: false, cardWidth: cardWidth,
-                                     dealFrom: CGSize(width: 160, height: -330))
-                            HStack(spacing: 4) {
-                                ScoreTag(text: showValue ? hand.score.text : nil, bust: hand.score.isBust)
-                                if hands.count > 1 || hand.doubled {
-                                    Text(eur(hand.bet))
-                                        .font(Typo.ui(11, .bold))
-                                        .foregroundStyle(Palette.gold)
+            let column = hands.count > 1 ? max(240, min(320, geo.size.width * 0.72)) : geo.size.width
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        if hands.isEmpty {
+                            HandView(cards: [], hideSecond: false, cardWidth: cardWidth, dealFrom: .zero)
+                                .frame(width: geo.size.width)
+                        } else {
+                            ForEach(Array(hands.enumerated()), id: \.element.id) { index, hand in
+                                let isActive = game.phase == .player && index == game.active && hands.count > 1
+                                VStack(spacing: 6) {
+                                    HandView(cards: hand.cards, hideSecond: false, cardWidth: cardWidth,
+                                             dealFrom: CGSize(width: 160, height: -330))
+                                    HStack(spacing: 6) {
+                                        ScoreTag(text: showValue ? hand.score.text : nil, bust: hand.score.isBust)
+                                        if hands.count > 1 || hand.doubled {
+                                            Text(eur(hand.bet))
+                                                .font(Typo.ui(11, .bold))
+                                                .foregroundStyle(Palette.gold)
+                                        }
+                                        if let verdict = hand.verdict, hands.count > 1 {
+                                            VerdictIcon(verdict: verdict)
+                                        }
+                                    }
                                 }
-                                if let verdict = hand.verdict, hands.count > 1 {
-                                    VerdictIcon(verdict: verdict)
-                                }
+                                .padding(.horizontal, 12)
+                                .frame(width: column)
+                                .padding(.vertical, 6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .strokeBorder(Palette.gold.opacity(isActive ? 0.9 : 0), lineWidth: 2)
+                                        .shadow(color: Palette.gold.opacity(isActive ? 0.6 : 0), radius: 8)
+                                )
+                                .id(hand.id)
+                                .transition(.scale.combined(with: .opacity))
                             }
                         }
-                        .frame(width: column)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(Palette.gold.opacity(isActive ? 0.9 : 0), lineWidth: 2)
-                                .shadow(color: Palette.gold.opacity(isActive ? 0.6 : 0), radius: 8)
-                        )
-                        .transition(.scale.combined(with: .opacity))
                     }
+                    .padding(.horizontal, 4)
+                }
+                .scrollIndicators(hands.count > 1 ? .visible : .hidden)
+                .onChange(of: game.active) { _, index in
+                    guard hands.indices.contains(index) else { return }
+                    withAnimation(.easeInOut(duration: 0.45)) { proxy.scrollTo(hands[index].id, anchor: .center) }
+                }
+                .onChange(of: game.hands.count) { _, _ in
+                    guard hands.indices.contains(game.active) else { return }
+                    withAnimation(.easeInOut(duration: 0.45)) { proxy.scrollTo(hands[game.active].id, anchor: .center) }
                 }
             }
-            .frame(width: geo.size.width)
         }
-        .frame(height: base * 1.4 + 38)
+        .frame(height: cardWidth * 1.4 + 44)
         .padding(.horizontal, 12)
     }
 }
@@ -2794,7 +2885,6 @@ private struct ChipTray: View {
     let balance: Int
     let haptics: Bool
     let sounds: Bool
-    @Environment(\.tableScale) private var scale
 
     var body: some View {
         let free = balance - game.bet
@@ -2804,7 +2894,7 @@ private struct ChipTray: View {
                     game.addChip(value, limit: balance)
                     if sounds { AudioServicesPlaySystemSound(1105) }
                 } label: {
-                    ChipView(value: value, tier: index, size: 72 * scale)
+                    ChipView(value: value, tier: index, size: 72)
                 }
                 .buttonStyle(PressStyle(scale: 0.88))
                 .disabled(value > free)
@@ -3239,6 +3329,7 @@ private struct OptionsSheet: View {
     @AppStorage(Key.sounds) private var sounds = true
     @AppStorage(Key.haptics) private var haptics = true
     @AppStorage(Key.ladyMode) private var ladyMode = 1
+    @State private var confirmReset = false
 
     var body: some View {
         ZStack {
@@ -3257,16 +3348,22 @@ private struct OptionsSheet: View {
                         Divider().overlay(.white.opacity(0.1))
                         row("Bar Lady") {
                             Picker("Bar Lady", selection: $ladyMode) {
-                                Text("Hide").tag(0)
+                                Text("Off").tag(0)
                                 Text("Text").tag(1)
-                                Text("Voice").tag(2)
                             }
                             .pickerStyle(.segmented)
-                            .frame(width: 190)
+                            .frame(width: 160)
                         }
                     }
                     .tint(Palette.gold)
                     .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+                    Button(role: .destructive) { confirmReset = true } label: {
+                        Label("Reset Progress", systemImage: "arrow.counterclockwise")
+                            .font(Typo.ui(.headline, .bold))
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                    }
 
                     ShareLink(item: "Ad-free Blackjack – just cards, chips and charming bar ladies. 🃏") {
                         Label("Share with Friends", systemImage: "square.and.arrow.up")
@@ -3290,6 +3387,14 @@ private struct OptionsSheet: View {
             }
         }
         .presentationDragIndicator(.visible)
+        .confirmationDialog("Reset progress?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Reset to €500", role: .destructive) {
+                ProgressStore.reset()
+                dismiss()
+            }
+        } message: {
+            Text("Reset your balance, level, statistics and achievements. Your name and options are kept.")
+        }
     }
 
     private func row<Control: View>(_ title: String, @ViewBuilder control: () -> Control) -> some View {
@@ -3352,7 +3457,7 @@ private struct ModeToast: View {
         .onTapGesture(perform: done)
         .onAppear { withAnimation(.spring(duration: 0.55, bounce: 0.35)) { go = true } }
         .task {
-            try? await Task.sleep(for: .seconds(1.8))
+            try? await Task.sleep(for: .seconds(2.8))
             done()
         }
         .accessibilityElement(children: .combine)
@@ -3433,7 +3538,6 @@ private struct RoundAction: View {
     let action: () -> Void
 
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.tableScale) private var scale
 
     var body: some View {
         Button(action: action) {
@@ -3448,7 +3552,7 @@ private struct RoundAction: View {
                     }
                 }
                 .foregroundStyle(.white)
-                .frame(width: 62 * scale, height: 62 * scale)
+                .frame(width: 62, height: 62)
                 .shadow(color: colors[0].opacity(0.45), radius: 8, y: 3)
                 Text(label)
                     .font(Typo.ui(.subheadline, .heavy))
