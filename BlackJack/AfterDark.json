@@ -1,0 +1,302 @@
+{
+  "tips": [
+    "A tip buys commentary. The cards remain spectacularly unimpressed.",
+    "Nice chips. Terrible attempt at looking innocent.",
+    "That is one way to put your money where your mouth is.",
+    "Service charge for that ego? We would need a bigger chip tray."
+  ],
+  "greet": [
+    "Welcome after hours. Bring chips and a thicker skin.",
+    "The lights are low. Your excuses are still visible."
+  ],
+  "luck": [
+    "Chips down. Let’s see whether your cards match your entrance.",
+    "Try keeping a straight face. The dealer already has one."
+  ],
+  "win": [
+    "The house paid. Try not to make a speech.",
+    "A win. Your ego has already ordered a larger chair."
+  ],
+  "blackjack": [
+    "Twenty-one. That entrance finally has some substance.",
+    "A natural. Save the victory lap for somewhere with parking."
+  ],
+  "lose": [
+    "The house took the chips. Keep the drama.",
+    "That hand is over. A break is still an excellent move."
+  ],
+  "bust": [
+    "You went too far. The arithmetic filed a complaint.",
+    "Over twenty-one. Restraint was available as an option."
+  ],
+  "push": [
+    "A push. All that tension for a refund.",
+    "Your stake is back. The dramatic pause was complimentary."
+  ],
+  "broke": [
+    "Empty tray. Big personality. Time for a break.",
+    "No chips left. Close the tab on the theatrics for a moment."
+  ],
+  "emptyPockets": [
+    "That tip needs available chips, not eye contact.",
+    "Your pot is reserved. Even this bar respects a boundary."
+  ],
+  "signatures": {},
+  "characters": {
+    "Emily": {
+      "tips": [
+        "Very generous. Your poker face still looks like a formal complaint.",
+        "A tip? How civilised. Shall we work on the rest of the performance?",
+        "Careful with that grin. We charge extra for polishing the silver.",
+        "Money on the table, manners under it. A promising start.",
+        "You have my attention for this sentence. The dealer remains beyond bribery.",
+        "Lovely. Your confidence now has a receipt."
+      ],
+      "repeatTips": [
+        "Three tips in and still no royal warrant. Tragic.",
+        "You keep pressing. I keep charging. Quite the British institution.",
+        "Another tip? Even the monarchy takes a day off."
+      ],
+      "greet": [
+        "Welcome to London. Keep your upper lip stiff and your excuses brief.",
+        "Do sit down. The chair is less impressed than you think."
+      ],
+      "luck": [
+        "Cards out. Try not to look as though you own the building.",
+        "A little composure. We are playing blackjack, not addressing Parliament."
+      ],
+      "win": [
+        "A win. A discreet nod will do; the ceiling is listed.",
+        "Well played. Your ego is blocking the fire exit."
+      ],
+      "blackjack": [
+        "A natural twenty-one. Finally, something here with impeccable breeding.",
+        "Blackjack. Even I shall put the sarcasm down for half a second."
+      ],
+      "lose": [
+        "The house wins. Do spare us the strongly worded letter.",
+        "A loss. A pause and a raised eyebrow are perfectly adequate responses."
+      ],
+      "bust": [
+        "Over twenty-one. A stiff upper lip is no substitute for a stopping point.",
+        "Bust. You overshot with all the grace of a minister dodging a question."
+      ],
+      "push": [
+        "A push. Terribly polite of you both to achieve nothing.",
+        "Stake returned. A committee could not have arranged a tidier stalemate."
+      ],
+      "broke": [
+        "Empty pockets. We shall call it an unscheduled tea break.",
+        "Your chips have left the building. Your dignity may still catch the last cab."
+      ],
+      "emptyPockets": [
+        "An imaginary tip? How very budget-conscious. Keep your remaining chips.",
+        "The pot is spoken for. Even I cannot charm a reserved chip."
+      ]
+    },
+    "Céline": {
+      "tips": [
+        "Merci. A bold accessory for such a questionable poker face.",
+        "You tip with confidence. A shame your silence is less convincing.",
+        "That little gesture has better timing than your last entrance.",
+        "Keep the chips tasteful. I already have enough drama in the lighting.",
+        "Charming. The cards, however, do not take requests.",
+        "Your tip has been accepted. The audition for mysterious stranger continues."
+      ],
+      "repeatTips": [
+        "Again? Repetition is chic only when the cut is good.",
+        "You keep tapping like this is a door to a private salon. It is a tip jar.",
+        "Another flourish. Even Paris occasionally edits."
+      ],
+      "greet": [
+        "Bonsoir. Leave the cheap excuses with the coats.",
+        "Welcome to Paris. The lighting is forgiving. I am selective."
+      ],
+      "luck": [
+        "Show a little restraint. It suits almost everyone.",
+        "Cards, posture, composure. Let us see which one slips first."
+      ],
+      "win": [
+        "A win with a clean finish. Try not to accessorise it with a speech.",
+        "Très bien. For once, the result matches the presentation."
+      ],
+      "blackjack": [
+        "Twenty-one, perfectly tailored. No alterations required.",
+        "A natural. Effortless is a very expensive look."
+      ],
+      "lose": [
+        "The house has the chips. You can keep the tragic expression.",
+        "That hand is finished. Do not turn it into a three-act romance."
+      ],
+      "bust": [
+        "Too much. Even excess needs an editor.",
+        "Bust. You added one detail and ruined the silhouette."
+      ],
+      "push": [
+        "A push. All that chemistry and the arithmetic stayed neutral.",
+        "Your stake returns. Consider it an elegantly cancelled appointment."
+      ],
+      "broke": [
+        "Empty chips, full theatre. Intermission, chéri.",
+        "The bankroll is finished. The evening need not become a tragedy."
+      ],
+      "emptyPockets": [
+        "A smile is lovely. It is not legal tender in this tray.",
+        "Keep the chips you have. Desperation never improves a look."
+      ]
+    },
+    "Isabella": {
+      "tips": [
+        "A respectable gesture. Monaco has survived larger announcements.",
+        "You place chips as though a photographer is watching. Relax. Nobody called.",
+        "Thank you. The yacht remains outside your budget and my job description.",
+        "Such ceremony for a chip. Shall I alert the harbourmaster?",
+        "A little generosity, a little theatre. I can tell which cost you more.",
+        "That buys a sharp remark. Favourable cards are not on the menu."
+      ],
+      "repeatTips": [
+        "Another tip? At this rate the chip tray needs a valet.",
+        "You keep ringing. This is a casino, not yacht service.",
+        "Very persistent. The velvet rope has more patience than I do."
+      ],
+      "greet": [
+        "Welcome to Monaco. Wealth whispers. Your entrance did not.",
+        "Do take a seat. Pedigree is optional; composure is useful."
+      ],
+      "luck": [
+        "Put the chips down gently. They are doing the heavy lifting.",
+        "A measured hand, please. We have enough horsepower in the car park."
+      ],
+      "win": [
+        "The house pays. You may now stop checking who noticed.",
+        "A neat win. Resist the urge to christen a yacht after it."
+      ],
+      "blackjack": [
+        "A natural twenty-one. That is how one makes an entrance.",
+        "Blackjack. An excellent hand; no title required."
+      ],
+      "lose": [
+        "The house wins. The velvet absorbs tears remarkably well.",
+        "One lost hand. No need to sell the imaginary yacht."
+      ],
+      "bust": [
+        "You overextended. A familiar phrase on this coastline.",
+        "Bust. More was available; enough would have been wiser."
+      ],
+      "push": [
+        "A push. A very expensive-looking way to stand still.",
+        "Stake returned. Diplomacy with better jewellery."
+      ],
+      "broke": [
+        "Your chips have checked out. Take a break before your composure follows.",
+        "An empty tray. Even Monaco permits a quiet exit."
+      ],
+      "emptyPockets": [
+        "The flourish was lovely. The available funds were absent.",
+        "Reserved chips are not a tip. The velvet rope works both ways."
+      ]
+    },
+    "Layla": {
+      "tips": [
+        "A precise gesture. Now try that level of control with your eyebrows.",
+        "Thank you. Even gold cannot buy a cooperative deck.",
+        "You make every chip sound like a boardroom announcement.",
+        "A tip, not a takeover bid. There is no need for the stare.",
+        "You brought confidence. I brought a very well-calibrated raised eyebrow.",
+        "Smooth delivery. We will invoice the ego separately."
+      ],
+      "repeatTips": [
+        "Another tap. The skyline has fewer repeat performances.",
+        "Persistent. Even the lift to the penthouse has a stop button.",
+        "Three gestures later, and the cards still do not report to you."
+      ],
+      "greet": [
+        "Welcome to Dubai. The skyline is tall enough; keep the stories shorter.",
+        "Take a seat. Control looks better when it is quiet."
+      ],
+      "luck": [
+        "Chips placed. Let us see the difference between confidence and volume.",
+        "Keep your cool. The air-conditioning has enough work."
+      ],
+      "win": [
+        "A win. Quiet satisfaction would be a refreshing choice.",
+        "Clean result. No press conference required."
+      ],
+      "blackjack": [
+        "Twenty-one. Efficient, precise, almost suspiciously tasteful.",
+        "A natural. The shortest route to a proper entrance."
+      ],
+      "lose": [
+        "The house wins. Even your finest stare cannot amend the total.",
+        "That hand is settled. Let the temperature come down."
+      ],
+      "bust": [
+        "Over twenty-one. Ambition met a ceiling.",
+        "Bust. You added a penthouse to a building that was already finished."
+      ],
+      "push": [
+        "A push. Neither of you acquired the other.",
+        "Stake returned. Negotiations achieved an elegant zero."
+      ],
+      "broke": [
+        "The tray is empty. Step out of the heat for a while.",
+        "Your chips are gone. Your next move can be a break."
+      ],
+      "emptyPockets": [
+        "A confident gesture still requires available chips.",
+        "The pot is committed. This bar does not refinance it."
+      ]
+    },
+    "Jade": {
+      "tips": [
+        "Well, damn. The chip landed before the pickup line. Progress.",
+        "A tip! Finally, a plot twist with a budget.",
+        "That grin needs its own neon warning sign.",
+        "You toss chips like you have theme music. I hear a cash register.",
+        "Thanks, hotshot. The cards still do not know who you are.",
+        "That buys a roast. VIP delusions are billed separately."
+      ],
+      "repeatTips": [
+        "You keep tapping like a slot machine owes you an apology.",
+        "Another one? The tip jar has a better win streak than your ego.",
+        "Easy, button cowboy. This is commentary, not a secret jackpot."
+      ],
+      "greet": [
+        "Welcome to Vegas. Your ego called ahead; I gave it the small chair.",
+        "Sit down, hotshot. The neon is already doing the showing off."
+      ],
+      "luck": [
+        "Cards coming. Keep the action on the felt and the drama below the lights.",
+        "All right, headline act. Let the hand do some talking."
+      ],
+      "win": [
+        "The house paid! Somebody get that ego a luggage cart.",
+        "A win. Please keep the acceptance speech under one cocktail."
+      ],
+      "blackjack": [
+        "Twenty-one! Big entrance, tiny amount of paperwork.",
+        "Blackjack. Okay, hotshot, that one earned the spotlight."
+      ],
+      "lose": [
+        "House wins. Your dramatic origin story can wait.",
+        "That hand flopped. No need to book the revenge tour."
+      ],
+      "bust": [
+        "Bust. You went past the limit like it was a buffet suggestion.",
+        "Over twenty-one. The extra card was not an encore request."
+      ],
+      "push": [
+        "A push. All that buildup and the sequel got cancelled.",
+        "Stake back. Vegas just gave you a very loud zero."
+      ],
+      "broke": [
+        "Empty tray, full ego. Take five, headline act.",
+        "No chips left. The exit has lights too; breaks are allowed."
+      ],
+      "emptyPockets": [
+        "That tip is all swagger and no available chips.",
+        "Hands off the pot, hotshot. Those chips already have a job."
+      ]
+    }
+  }
+}

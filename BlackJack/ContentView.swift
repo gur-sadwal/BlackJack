@@ -24,9 +24,11 @@ struct BlackJackApp: App {
 // MARK: - Regeln, Schlüssel, Farben
 
 private enum Rules {
-    static let startBalance = 500
-    static let refillAmount = 500
-    static let cooldown: TimeInterval = 60 * 60   // Pleiteschutz: 60 Minuten
+    static let startBalance = 50_000
+    static let refillAmount = 50_000
+    static let nightRechargeAmount = 100_000
+    static let nightRechargeCooldown: TimeInterval = 10 * 60
+    static let cooldown: TimeInterval = 30 * 60   // Normalmodus: 30 Minuten, einmal täglich
     static let reshuffleBelow = 15                // Neu mischen unter 15 Karten
     static let maxHands = 4                       // bis zu 3× splitten
 }
@@ -55,7 +57,10 @@ private enum LadyPreference {
 }
 
 private enum Key {
+    static let moneyVersion = "moneyVersion"
     static let balance = "balance"
+    static let reservedBet = "reservedBet"
+    static let lastNightRecharge = "lastNightRecharge"
     static let brokeSince = "brokeSince"
     static let lastRefillDay = "lastRefillDay"
     static let games = "games"
@@ -81,17 +86,74 @@ private enum Key {
     static let sounds = "sounds"
     static let haptics = "haptics"
     static let ladyMode = "ladyMode"              // 0 aus · 1 Text
+    static let proUnlocked = "proUnlocked"
     static let afterDark = "afterDark"            // alternativer Modus (Standard: aus)
 }
 
 private enum ProgressStore {
-    static let keys = [Key.balance, Key.brokeSince, Key.lastRefillDay, Key.games, Key.wins,
+    static let keys = [Key.balance, Key.reservedBet, Key.brokeSince, Key.lastRefillDay, Key.games, Key.wins,
                        Key.losses, Key.pushes, Key.blackjacks, Key.splits, Key.doubles,
                        Key.tips, Key.tipTotal, Key.streak, Key.bestStreak, Key.highest,
-                       Key.xp, Key.claimed, Key.venuesPlayed, Key.venue]
+                       Key.xp, Key.claimed, Key.venuesPlayed, Key.venue, Key.proUnlocked]
 
     static func reset(in defaults: UserDefaults = .standard) {
         for key in keys { defaults.removeObject(forKey: key) }
+    }
+}
+
+/// Geldbeträge intern in Cent. Alte Euro-Speicherstände einmalig umrechnen.
+private enum MoneyStore {
+    static func prepare(in defaults: UserDefaults = .standard) {
+        guard defaults.integer(forKey: Key.moneyVersion) < 1 else { return }
+        for key in [Key.balance, Key.reservedBet, Key.highest, Key.tipTotal] {
+            if let amount = defaults.object(forKey: key) as? Int { defaults.set(amount * 100, forKey: key) }
+        }
+        defaults.set(1, forKey: Key.moneyVersion)
+    }
+}
+
+/// Freies Guthaben und ungespielte Chips sind getrennte Beträge.
+struct WagerReservation {
+    let available: Int
+    let chips: Int
+
+    func setting(_ amount: Int) -> WagerReservation? {
+        guard amount >= 0, amount <= available + chips else { return nil }
+        return WagerReservation(available: available + chips - amount, chips: amount)
+    }
+
+    /// Ungespielte, persistierte Chips nach einem Neustart genau einmal zurückgeben.
+    static func recover(in defaults: UserDefaults = .standard) {
+        let chips = max(0, defaults.integer(forKey: Key.reservedBet))
+        guard chips > 0 else { return }
+        let available = defaults.object(forKey: Key.balance) as? Int ?? Rules.startBalance
+        defaults.set(available + chips, forKey: Key.balance)
+        defaults.removeObject(forKey: Key.reservedBet)
+    }
+}
+
+/// Lokaler Zeitstempel, keine Serverzeit und keine geräteübergreifende Absicherung.
+struct NightRecharge {
+    let lastClaim: Double
+
+    var cooldownEnd: Date? {
+        lastClaim > 0 ? Date(timeIntervalSince1970: lastClaim + Rules.nightRechargeCooldown) : nil
+    }
+
+    func remaining(at now: Date) -> TimeInterval {
+        max(0, cooldownEnd?.timeIntervalSince(now) ?? 0)
+    }
+
+    func canClaim(afterDark: Bool, at now: Date) -> Bool {
+        afterDark && remaining(at: now) == 0
+    }
+
+    /// Ein manueller Claim; verstrichene Intervalle sammeln keine weiteren Claims an.
+    static func claim(balance: inout Int, lastClaim: inout Double, afterDark: Bool, at now: Date) -> Bool {
+        guard NightRecharge(lastClaim: lastClaim).canClaim(afterDark: afterDark, at: now) else { return false }
+        lastClaim = now.timeIntervalSince1970
+        balance += Rules.nightRechargeAmount
+        return true
     }
 }
 
@@ -152,10 +214,11 @@ private enum Typo {
 }
 
 /// "€1,250" – englische Schreibweise.
-private let euroFormat = IntegerFormatStyle<Int>.number.locale(Locale(identifier: "en_US"))
+private let euroFormat = FloatingPointFormatStyle<Double>.number
+    .locale(Locale(identifier: "en_US")).precision(.fractionLength(0...2))
 
 private func eur(_ n: Int) -> String {
-    "€" + n.formatted(euroFormat)
+    "€" + (Double(n) / 100).formatted(euroFormat.precision(.fractionLength(n % 100 == 0 ? 0 : 2)))
 }
 
 /// Kalendertag als schlanker String, z. B. "2026-10-31".
@@ -164,10 +227,10 @@ private func dayKey(_ date: Date) -> String {
     return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
 }
 
-/// Startet bei exakt 0 € einmalig den Cooldown-Zeitstempel und räumt ihn sonst auf.
+/// Startet unter dem kleinsten spielbaren Einsatz (1 €) einmalig den Pleiteschutz.
 private func syncBroke(_ balance: inout Int, _ brokeSince: inout Double) {
-    if balance <= 0 {
-        balance = 0
+    if balance < 100 {
+        balance = max(0, balance)
         if brokeSince == 0 { brokeSince = Date.now.timeIntervalSince1970 }
     } else if brokeSince != 0 {
         brokeSince = 0
@@ -175,7 +238,7 @@ private func syncBroke(_ balance: inout Int, _ brokeSince: inout Double) {
 }
 
 extension EnvironmentValues {
-    @Entry var deckStyle: Int = 2
+    @Entry var deckStyle: Int = 1
 }
 
 // MARK: - Fortschritt
@@ -325,7 +388,7 @@ final class Game {
     var activeHand: Hand? {
         phase == .player && hands.indices.contains(active) ? hands[active] : nil
     }
-    var canDeal: Bool { phase.isIdle && !isAnimating && bet >= minBet }
+    var canDeal: Bool { phase == .betting && !isAnimating && bet >= minBet }
     var canDouble: Bool {
         guard let hand = activeHand else { return false }
         return hand.cards.count == 2 && !hand.splitAces
@@ -341,7 +404,7 @@ final class Game {
     // MARK: Einsatz
 
     func addChip(_ value: Int, limit: Int) {
-        guard phase == .betting, !isAnimating, bet + value <= limit else { return }
+        guard value > 0, phase == .betting, !isAnimating, bet + value <= limit else { return }
         bet += value
     }
 
@@ -560,7 +623,7 @@ final class Game {
             resolved[i].verdict = verdict
 
             switch verdict {
-            case .blackjack:                      // 3:2, bei ungeradem Einsatz aufgerundet
+            case .blackjack:                      // 3:2, nur halbe Cent aufrunden
                 credit += hand.bet + (hand.bet * 3 + 1) / 2
                 blackjacks += 1
                 wins += 1
@@ -601,31 +664,25 @@ final class Game {
 
 // MARK: - Jeton-Werte (dynamisch zum Guthaben)
 
-/// ≈ 2 %, 5 %, 10 % und 25 % des Guthabens, sinnvoll gerundet, mindestens 1 €
-/// bzw. der Mindesteinsatz des Tisches.
+/// Vier übliche Casino-Werte in einer passenden Größenordnung statt Prozent-Einsätzen.
+/// Die Auswahl bleibt während des Setzens konstant; bezahlbare Chips werden separat aktiviert.
 private func chipValues(for balance: Int, minBet: Int) -> [Int] {
-    guard balance >= max(minBet, 1) else { return [] }
-
-    func step(_ x: Double) -> Int {
-        switch x {
-        case ..<10: 1
-        case ..<100: 5
-        case ..<1_000: 25
-        case ..<10_000: 100
-        case ..<100_000: 1_000
-        default: 10_000
+    guard minBet > 0, balance >= minBet else { return [] }
+    var denominations = [minBet]
+    var scale = 100 // Cent pro Euro
+    while scale <= balance {
+        for value in [1, 2, 5, 10, 25, 50] {
+            guard scale <= Int.max / value else { continue }
+            let amount = scale * value
+            if amount >= minBet && amount <= balance { denominations.append(amount) }
         }
+        guard scale <= Int.max / 100 else { break }
+        scale *= 100
     }
-
-    var values: [Int] = []
-    for percent in [2.0, 5.0, 10.0, 25.0] {
-        let raw = max(Double(balance) * percent / 100, Double(minBet))
-        let s = step(raw)
-        var value = max(1, minBet, Int((raw / Double(s)).rounded()) * s)
-        if let last = values.last, value <= last { value = last + step(Double(last)) }
-        values.append(value)
-    }
-    return values.filter { $0 <= balance }
+    let values = Array(Set(denominations)).sorted()
+    let target = max(minBet, balance / 4)
+    let upper = min(values.count, max(4, values.prefix { $0 <= target }.count))
+    return Array(values.prefix(upper).suffix(4))
 }
 
 // MARK: - Tische & Bar-Ladys
@@ -659,14 +716,14 @@ struct Venue: Identifiable {
     var photo: String { "lady-" + city.lowercased().replacingOccurrences(of: " ", with: "-") }
 
     /// Trinkgeld pro Tipp auf die Bar-Lady – steigt mit der Exklusivität des Tisches.
-    var tip: Int { [50, 100, 250, 1_000, 5_000][id] }
+    var tip: Int { [5_000, 10_000, 25_000, 100_000, 500_000][id] }
 
     /// Symbol auf dem Namensschild der Bar-Lady.
     var plateIcon: PlateIcon { [.crown, .eiffel, .palace, .tower, .spade][id] }
 
     static let all: [Venue] = [
         Venue(
-            id: 0, city: "LONDON", tagline: "The Velvet Club", level: 1, minBet: 1, entry: 0,
+            id: 0, city: "LONDON", tagline: "The Velvet Club", level: 1, minBet: 100, entry: 0,
             felt: [Color(red: 0.07, green: 0.50, blue: 0.27), Color(red: 0.02, green: 0.25, blue: 0.13)],
             accent: Color(red: 0.25, green: 0.80, blue: 0.48), room: Color(red: 0.30, green: 0.18, blue: 0.10),
             lady: Lady(
@@ -677,7 +734,7 @@ struct Venue: Identifiable {
             )
         ),
         Venue(
-            id: 1, city: "PARIS", tagline: "Salon Lumière", level: 3, minBet: 10, entry: 1_000,
+            id: 1, city: "PARIS", tagline: "Salon Lumière", level: 3, minBet: 1_000, entry: 100_000,
             felt: [Color(red: 0.36, green: 0.16, blue: 0.48), Color(red: 0.15, green: 0.05, blue: 0.22)],
             accent: Color(red: 0.74, green: 0.42, blue: 0.95), room: Color(red: 0.24, green: 0.10, blue: 0.24),
             lady: Lady(
@@ -688,7 +745,7 @@ struct Venue: Identifiable {
             )
         ),
         Venue(
-            id: 2, city: "MONACO", tagline: "Riviera Royale", level: 6, minBet: 50, entry: 5_000,
+            id: 2, city: "MONACO", tagline: "Riviera Royale", level: 6, minBet: 5_000, entry: 500_000,
             felt: [Color(red: 0.06, green: 0.24, blue: 0.48), Color(red: 0.02, green: 0.09, blue: 0.22)],
             accent: Color(red: 1.00, green: 0.62, blue: 0.22), room: Color(red: 0.36, green: 0.20, blue: 0.08),
             lady: Lady(
@@ -699,7 +756,7 @@ struct Venue: Identifiable {
             )
         ),
         Venue(
-            id: 3, city: "DUBAI", tagline: "Desert Pearl", level: 10, minBet: 250, entry: 25_000,
+            id: 3, city: "DUBAI", tagline: "Desert Pearl", level: 10, minBet: 25_000, entry: 2_500_000,
             felt: [Color(red: 0.17, green: 0.14, blue: 0.08), Color(red: 0.05, green: 0.04, blue: 0.02)],
             accent: Color(red: 1.00, green: 0.76, blue: 0.28), room: Color(red: 0.32, green: 0.22, blue: 0.08),
             lady: Lady(
@@ -710,7 +767,7 @@ struct Venue: Identifiable {
             )
         ),
         Venue(
-            id: 4, city: "LAS VEGAS", tagline: "Neon Palace", level: 15, minBet: 1_000, entry: 100_000,
+            id: 4, city: "LAS VEGAS", tagline: "Neon Palace", level: 15, minBet: 100_000, entry: 10_000_000,
             felt: [Color(red: 0.10, green: 0.10, blue: 0.30), Color(red: 0.03, green: 0.03, blue: 0.12)],
             accent: Color(red: 1.00, green: 0.32, blue: 0.70), room: Color(red: 0.22, green: 0.06, blue: 0.26),
             lady: Lady(
@@ -727,93 +784,96 @@ struct Venue: Identifiable {
 
 private enum Lines {
     static let tips = [
-        "Thank you, that's very kind!",
-        "Cheers! Good luck at the table.",
-        "Much appreciated – may the cards be with you.",
-        "You're a star. Now go beat the dealer.",
-        "That's generous – thank you!",
-        "Thanks a lot! Want a fresh drink with that?",
-        "Lovely, thank you. Play smart out there.",
-        "Much appreciated! Keep an eye on the dealer’s upcard.",
-        "Thank you! A little patience can go a long way.",
-        "You're too kind. Good luck!",
-        "Thanks! I'll keep your glass full.",
-        "Cheers to you – and to a lucky hand.",
-        "Thank you! The dealer looks nervous already.",
-        "That made my shift. Thanks!",
-        "Thanks! Keep an eye on those aces.",
-        "Kind of you! Fortune favours the bold.",
-        "Thanks! Here’s hoping your next double pays off.",
-        "Appreciated! Have fun out there.",
-        "Thanks, you're a gem.",
-        "That's sweet of you. Best of luck!",
-        "Thank you! May your next card be a ten.",
-        "Cheers! Here’s hoping for a natural blackjack.",
-        "Thanks a million. Go get 'em.",
-        "How kind! I’ll make your next drink extra special.",
-        "Thank you – a real class act.",
-        "Much obliged! Watch the dealer's up card.",
-        "Thanks! You've got good energy tonight.",
-        "You're my favourite guest tonight. Thank you!",
-        "Thank you! Luck looks good on you.",
-        "Cheers! I've got a good feeling about your next hand.",
+        "Thank you for the tip.",
+        "Much appreciated. Enjoy the table.",
+        "Thank you. Your remaining chips are available to play.",
+        "Cheers. Take your time with the next hand.",
+        "Thank you. The table is ready when you are.",
+        "Tip received. Good evening.",
+        "Many thanks. Enjoy your game.",
+        "Thank you. Drinks service is open.",
+        "Appreciated. Watch the dealer’s upcard.",
+        "Thank you for your generosity.",
+        "Cheers. Your tip has been collected.",
+        "Thank you. Set your chips when you are ready.",
     ]
     static let greet = [
-        "Welcome to the table!",
-        "Good evening – make yourself comfortable.",
-        "Nice to see you. Ready to play?",
-        "Welcome! Drinks are on their way.",
+        "Welcome to the table.",
+        "Good evening. Place your chips when ready.",
+        "Welcome. Blackjack pays three to two.",
+        "The table is open. Take your time.",
     ]
     static let luck = [
-        "Good luck!",
-        "Fingers crossed.",
-        "Here we go!",
-        "Let's see those cards.",
+        "Bets placed. Here come the cards.",
+        "The next hand is starting.",
+        "Your cards are on their way.",
+        "Let’s see the opening hand.",
     ]
     static let win = [
-        "Nicely played!",
-        "Winner, winner!",
-        "Well done!",
-        "Great hand!",
+        "Winning hand. Your payout includes your stake.",
+        "You win. Payout credited.",
+        "The hand is yours.",
+        "A win for the player.",
     ]
     static let blackjack = [
-        "Blackjack! Beautiful.",
-        "21 – a perfect hand!",
-        "Now that's how it's done!",
+        "Blackjack. Three-to-two payout.",
+        "A natural twenty-one.",
+        "Blackjack. Your stake and winnings are credited.",
     ]
     static let lose = [
-        "Unlucky. There’s always another hand.",
-        "Shake it off – new hand, new luck.",
-        "Close one. Go again?",
+        "The dealer wins this hand.",
+        "This hand goes to the house.",
+        "Hand complete. Take your time before the next bet.",
     ]
     static let bust = [
-        "Just over – happens to the best.",
-        "Bust! Better luck next hand.",
+        "Over twenty-one. This hand is bust.",
+        "Bust. The stake goes to the house.",
     ]
     static let push = [
-        "A tie – you keep your bet.",
-        "Push. Nobody loses.",
+        "Push. Your stake is returned.",
+        "Equal totals. No gain or loss.",
     ]
     static let broke = [
-        "Take a break – I'll save your seat.",
-        "Out of chips? The table will be here when you’re ready.",
+        "Out of chips. The refill details are in your profile.",
+        "Your bankroll is empty. Time for a break.",
     ]
     static let greedy = [
-        "Five tips in a row? You came for the chat, not for blackjack. I'll take it all, thanks!",
-        "You tipped your way out of the game. The house appreciates your generosity!",
-        "Five tips and not a single hand? That conversation just cost you the whole stack.",
-        "Five tips later and your chips have vanished. At least the conversation was good!",
+        "Five consecutive tips. The remaining bankroll has been collected.",
+        "That was the fifth consecutive tip. Your remaining chips went to the bar.",
     ]
     static let emptyPockets = [
-        "Kind thought, but you need those chips for the table.",
-        "Not enough chips for a tip. No worries—enjoy the game!",
+        "Not enough available chips for this tip.",
+        "Your remaining chips are reserved for the table.",
     ]
 
-    /// Optionaler zweiter Spruch-Satz aus `AfterDark.json` (nur lokal, nicht im Repo).
-    /// Fehlt die Datei, gibt es den alternativen Modus nicht.
+    /// Gebündelter Spruch-Satz; lokale Builds können ihn über Private/ überschreiben.
+    /// Bei fehlenden oder unlesbaren Daten bleibt der Normalmodus verfügbar.
     struct Night: Decodable {
         let tips, greet, luck, win, blackjack, lose, bust, push, broke, emptyPockets: [String]
         let signatures: [String: [String]]
+        /// Optional: pro Figur und Ereignis; alte lokale Dateien bleiben kompatibel.
+        let characters: [String: [String: [String]]]?
+
+        func pool(event: String, character: String, repeatedTips: Bool = false) -> [String] {
+            let personal = characters?[character]
+            let key = event == "tips" && repeatedTips && personal?["repeatTips"]?.isEmpty == false
+                ? "repeatTips" : event
+            let fallback: [String]
+            switch event {
+            case "tips": fallback = tips + (signatures[character] ?? [])
+            case "greet": fallback = greet
+            case "luck": fallback = luck
+            case "win": fallback = win
+            case "blackjack": fallback = blackjack
+            case "lose": fallback = lose
+            case "bust": fallback = bust
+            case "push": fallback = push
+            case "broke": fallback = broke
+            default: fallback = emptyPockets
+            }
+            let selected = personal?[key].flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+            return selected.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
     }
 
     static let night: Night? = {
@@ -825,11 +885,20 @@ private enum Lines {
 
 /// Liefert jeden Spruch erst wieder, wenn alle anderen dran waren.
 private struct LineBag {
+    private var pool: [String] = []
     private var order: [Int] = []
+    private var previous: String?
 
     mutating func next(_ lines: [String]) -> String {
-        if order.isEmpty { order = Array(lines.indices).shuffled() }
-        return lines[order.removeLast()]
+        guard !lines.isEmpty else { return "" }
+        if pool != lines { pool = lines; order = [] }
+        if order.isEmpty {
+            order = Array(lines.indices).shuffled()
+            if order.count > 1, lines[order.last!] == previous { order.swapAt(0, order.count - 1) }
+        }
+        let line = lines[order.removeLast()]
+        previous = line
+        return line
     }
 }
 
@@ -850,27 +919,27 @@ private struct Achievement: Identifiable {
 
     static let all: [Achievement] = [
         Achievement(id: 0, title: "The Beginning", detail: "Win your first game", icon: "star.fill",
-                    reward: 100, target: 1) { $0.wins },
+                    reward: 10_000, target: 1) { $0.wins },
         Achievement(id: 1, title: "My First Blackjack", detail: "Get your first blackjack",
-                    icon: "suit.spade.fill", reward: 250, target: 1) { $0.blackjacks },
+                    icon: "suit.spade.fill", reward: 25_000, target: 1) { $0.blackjacks },
         Achievement(id: 2, title: "The More the Merrier", detail: "Split a hand",
-                    icon: "arrow.triangle.branch", reward: 50, target: 1) { $0.splits },
+                    icon: "arrow.triangle.branch", reward: 5_000, target: 1) { $0.splits },
         Achievement(id: 3, title: "Double Trouble", detail: "Double down 10 times", icon: "plus.circle.fill",
-                    reward: 150, target: 10) { $0.doubles },
+                    reward: 15_000, target: 10) { $0.doubles },
         Achievement(id: 4, title: "Charmer", detail: "Tip the bar lady 10 times", icon: "wineglass.fill",
-                    reward: 150, target: 10) { $0.tips },
+                    reward: 15_000, target: 10) { $0.tips },
         Achievement(id: 5, title: "Regular", detail: "Play 50 rounds", icon: "clock.fill",
-                    reward: 300, target: 50) { $0.games },
+                    reward: 30_000, target: 50) { $0.games },
         Achievement(id: 6, title: "Hot Streak", detail: "Win 5 rounds in a row", icon: "flame.fill",
-                    reward: 400, target: 5) { $0.bestStreak },
+                    reward: 40_000, target: 5) { $0.bestStreak },
         Achievement(id: 7, title: "Globetrotter", detail: "Play at 3 tables",
-                    icon: "globe.europe.africa.fill", reward: 500, target: 3) { $0.venues },
+                    icon: "globe.europe.africa.fill", reward: 50_000, target: 3) { $0.venues },
         Achievement(id: 8, title: "High Roller", detail: "Reach a balance of €5,000", icon: "crown.fill",
-                    reward: 1_000, target: 5_000) { $0.highest },
+                    reward: 100_000, target: 500_000) { $0.highest },
         Achievement(id: 9, title: "Blackjack Pro", detail: "Get 25 blackjacks", icon: "trophy.fill",
-                    reward: 2_500, target: 25) { $0.blackjacks },
+                    reward: 250_000, target: 25) { $0.blackjacks },
         Achievement(id: 10, title: "Veteran", detail: "Play 500 rounds", icon: "medal.fill",
-                    reward: 2_000, target: 500) { $0.games },
+                    reward: 200_000, target: 500) { $0.games },
     ]
 }
 
@@ -883,9 +952,13 @@ private enum Deck {
     static let classic = 0
     static let blue = 1
     static let pro = 2
-    static let standard = pro
+    static let standard = blue
 
-    static func valid(_ index: Int) -> Int { names.indices.contains(index) ? index : standard }
+    static func valid(_ value: Int) -> Int { names.indices.contains(value) ? value : standard }
+    static func selected(_ value: Int, proUnlocked: Bool) -> Int {
+        let index = valid(value)
+        return index == pro && !proUnlocked ? blue : index
+    }
 }
 
 // MARK: - Pleiteschutz
@@ -975,6 +1048,15 @@ struct ContentView: View {
                 if ProcessInfo.processInfo.arguments.contains("--reset-progress") {
                     ProgressStore.reset()
                 }
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--ui-testing-reset") {
+                    afterDark = false
+                    UserDefaults.standard.removeObject(forKey: Key.deck)
+                    UserDefaults.standard.removeObject(forKey: Key.lastNightRecharge)
+                }
+                #endif
+                MoneyStore.prepare()
+                WagerReservation.recover()
                 ladyMode = LadyPreference.normalized(ladyMode)
             }
             syncBroke(&balance, &brokeSince)
@@ -989,6 +1071,7 @@ struct ContentView: View {
 // MARK: - Lobby
 
 private struct LobbyScreen: View {
+    @AppStorage(Key.proUnlocked) private var proUnlocked = false
     let play: (Int) -> Void
 
     @AppStorage(Key.balance) private var balance = Rules.startBalance
@@ -1000,6 +1083,7 @@ private struct LobbyScreen: View {
     @State private var showProfile = false
     @State private var showOptions = false
     @State private var spadeTaps: [Date] = []
+    @State private var proReward = false
     @State private var modeToast: Bool?             // true = „After Dark Unlocked“, false = „Back to Business“
 
     private var level: Int { Progression.level(xp: xp) }
@@ -1017,6 +1101,7 @@ private struct LobbyScreen: View {
                         PlayerBadge(name: name, xp: xp, size: 74)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("openProfile")
                     Spacer()
                     VStack(alignment: .trailing, spacing: 8) {
                         BalancePill(balance: balance)
@@ -1051,7 +1136,7 @@ private struct LobbyScreen: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 10)
-                .accessibilityLabel("Blackjack")
+                .accessibilityLabel("Blackjack").accessibilityIdentifier("modeSwitch")
 
                 Spacer(minLength: 12)
 
@@ -1106,6 +1191,7 @@ private struct LobbyScreen: View {
                     RoundIconButton(icon: "gearshape.fill", tint: Color(white: 0.92), ink: .black.opacity(0.7)) {
                         showOptions = true
                     }
+                    .accessibilityIdentifier("openOptions")
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
@@ -1121,7 +1207,7 @@ private struct LobbyScreen: View {
         .onChange(of: focused) { _, new in if let new { savedVenue = new } }
         .overlay {
             if let modeToast {
-                ModeToast(unlocked: modeToast) {
+                ModeToast(unlocked: modeToast, proReward: proReward) {
                     withAnimation(.easeOut(duration: 0.35)) { self.modeToast = nil }
                 }
                 .transition(.opacity)
@@ -1141,6 +1227,8 @@ private struct LobbyScreen: View {
         spadeTaps = []
         withAnimation(.spring(duration: 0.4)) {
             afterDark.toggle()
+            proReward = afterDark && !proUnlocked
+            if afterDark { proUnlocked = true }
             modeToast = afterDark
         }
     }
@@ -1320,6 +1408,7 @@ private struct VenueArt: View {
 // MARK: - Spieltisch
 
 private struct TableScreen: View {
+    @AppStorage(Key.proUnlocked) private var proUnlocked = false
     let venue: Venue
     let leave: () -> Void
 
@@ -1358,6 +1447,8 @@ private struct TableScreen: View {
     @State private var pendingLine: String?
     @State private var queuedLine: String?
     @State private var isPerformingAction = false
+    @State private var showRecharge = false
+    @AppStorage(Key.reservedBet) private var reservedBet = 0
 
     init(venue: Venue, leave: @escaping () -> Void) {
         self.venue = venue
@@ -1397,13 +1488,28 @@ private struct TableScreen: View {
                 controls
                     .disabled(isPerformingAction || game.isAnimating)
                 HStack {
-                    BalancePill(balance: balance - heldCredit)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("AVAILABLE").font(Typo.ui(10, .bold)).foregroundStyle(.white.opacity(0.7))
+                        BalancePill(balance: balance - heldCredit)
+                    }
                     Spacer()
-                    ProtectionPill()
+                    if game.phase != .finished {
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text("CHIPS IN POT").font(Typo.ui(10, .bold)).foregroundStyle(Palette.gold)
+                            Text(eur(game.stake))
+                                .font(Typo.ui(.headline, .bold)).monospacedDigit()
+                                .foregroundStyle(Palette.gold)
+                                .contentTransition(.numericText())
+                                .animation(.snappy(duration: 0.2), value: game.stake)
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Chips in pot \(eur(game.stake))")
+                        .accessibilityIdentifier("pot")
+                    }
                 }
                 .padding(.horizontal, 16)
-                if game.phase == .betting && balance >= venue.minBet {
-                    ChipTray(game: game, balance: balance, haptics: haptics, sounds: sounds)
+                if game.phase == .betting && balance + game.bet >= venue.minBet {
+                    ChipTray(game: game, balance: balance, haptics: haptics, sounds: sounds, addChip: addChip)
                         .disabled(isPerformingAction || game.isAnimating)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -1418,7 +1524,8 @@ private struct TableScreen: View {
                 .zIndex(10)
             }
         }
-        .environment(\.deckStyle, Deck.valid(deck))
+        .sheet(isPresented: $showRecharge) { ProfileSheet(initialTab: 3) }
+        .environment(\.deckStyle, Deck.selected(deck, proUnlocked: proUnlocked))
         .sensoryFeedback(trigger: greed) { _, new in haptics && new != nil ? .error : nil }
         .onAppear {
             game.standOn21 = standOn21
@@ -1428,7 +1535,7 @@ private struct TableScreen: View {
             if phase == .finished && (heldCredit != 0 || pendingLine != nil) { revealSettlement() }
         }
         .onAppear {
-            say(lines(Lines.greet, { $0.greet }).randomElement() ?? "")
+            say(lines(Lines.greet, event: "greet").randomElement() ?? "")
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "demoRound") { demoRound() }
             if UserDefaults.standard.bool(forKey: "demoGreed") {
@@ -1455,7 +1562,8 @@ private struct TableScreen: View {
         }
     }
 
-    private var available: Int { balance - (game.phase == .betting ? game.bet : 0) }
+    private var available: Int { balance - heldCredit }
+    private var bettingFunds: Int { available + (game.phase == .betting ? game.bet : 0) }
 
     /// Nur für Screenshots im Debug-Build ausblendbar (Startargument `-noLady YES`).
     private var showLady: Bool {
@@ -1470,7 +1578,7 @@ private struct TableScreen: View {
 
     private var topBar: some View {
         HStack(spacing: 12) {
-            Button(action: leave) {
+            Button(action: leaveTable) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(.black.opacity(0.7))
@@ -1497,16 +1605,21 @@ private struct TableScreen: View {
     private var controls: some View {
         let phase = game.phase
         Group {
-            if balance == 0 && phase.isIdle {
-                RefillCard()
-                    .padding(.horizontal, 16)
-            } else if phase.isIdle && balance < venue.minBet {
+            if bettingFunds < 100 && phase.isIdle {
+                if afterDark {
+                    Button("Recharge in Profile") { showRecharge = true }
+                        .buttonStyle(CapsuleStyle(colors: [Palette.afterDark, Palette.purple], ink: .white))
+                        .padding(.horizontal, 16)
+                } else {
+                    RefillCard().padding(.horizontal, 16)
+                }
+            } else if phase.isIdle && bettingFunds < venue.minBet {
                 VStack(spacing: 10) {
                     Text("Your balance is below this table's minimum bet of \(eur(venue.minBet)).")
                         .font(Typo.ui(.subheadline, .semibold))
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.white.opacity(0.85))
-                    Button("Choose another table", action: leave)
+                    Button("Choose another table", action: leaveTable)
                         .buttonStyle(CapsuleStyle(colors: [Palette.gold, Palette.goldDeep], ink: .black))
                 }
                 .padding(.horizontal, 24)
@@ -1515,17 +1628,17 @@ private struct TableScreen: View {
                 case .betting:
                     HStack(alignment: .top, spacing: 30) {
                         RoundAction(icon: "xmark", label: "Reset", colors: [Palette.lose, Color(red: 0.7, green: 0.18, blue: 0.16)]) {
-                            game.clearBet()
+                            setBet(0)
                         }
                         .disabled(game.bet == 0)
                         RoundAction(icon: "flame.fill", label: "All In", colors: [Palette.purple, Color(red: 0.45, green: 0.15, blue: 0.62)]) {
-                            game.setBet(balance)
+                            setBet(balance + game.bet)
                         }
                         RoundAction(icon: "rectangle.portrait.on.rectangle.portrait.fill", label: "Deal",
                                     colors: [Palette.play, Palette.playDeep], ring: true) {
                             deal()
                         }
-                        .disabled(!game.canDeal || game.bet > balance)
+                        .disabled(!game.canDeal)
                     }
                 case .dealing, .player, .dealer:
                     HStack(alignment: .top, spacing: 16) {
@@ -1574,13 +1687,32 @@ private struct TableScreen: View {
         }
     }
 
+    private func setBet(_ amount: Int) {
+        guard game.phase == .betting, !isPerformingAction, !game.isAnimating,
+              let next = WagerReservation(available: balance, chips: game.bet).setting(amount) else { return }
+        game.setBet(next.chips)
+        balance = next.available
+        reservedBet = next.chips
+    }
+
+    private func addChip(_ amount: Int) {
+        guard amount > 0 else { return }
+        setBet(game.bet + amount)
+    }
+
+    private func leaveTable() {
+        if game.phase == .betting { setBet(0) }
+        syncBroke(&balance, &brokeSince)
+        leave()
+    }
+
     private func deal() {
-        guard game.canDeal, game.bet <= balance else { return }
+        guard game.canDeal else { return }
         run({ await game.deal() }, prepare: {
-            balance -= game.bet
+            reservedBet = 0 // bereits beim Setzen abgebucht; ab jetzt im Spiel
             tipStreak = 0
             if bubble == nil && Int.random(in: 0..<3) == 0 {
-                say(lines(Lines.luck, { $0.luck }).randomElement() ?? "")
+                say(lines(Lines.luck, event: "luck").randomElement() ?? "")
             }
         })
     }
@@ -1603,8 +1735,8 @@ private struct TableScreen: View {
 
     private func again() {
         guard game.phase == .finished, !isPerformingAction, !game.isAnimating else { return }
-        game.prepareNextRound(keepBet: true, limit: balance)
-        if game.bet < venue.minBet { game.setBet(min(venue.minBet, balance)) }
+        game.prepareNextRound(keepBet: false, limit: balance)
+        setBet(max(venue.minBet, min(game.lastBet, balance)))
         deal()
     }
 
@@ -1627,11 +1759,11 @@ private struct TableScreen: View {
         syncBroke(&balance, &brokeSince)
 
         let pool: [String]
-        if s.blackjacks > 0 { pool = lines(Lines.blackjack, { $0.blackjack }) }
-        else if s.net > 0 { pool = lines(Lines.win, { $0.win }) }
-        else if s.busted { pool = lines(Lines.bust, { $0.bust }) }
-        else if s.net < 0 { pool = balance == 0 ? lines(Lines.broke, { $0.broke }) : lines(Lines.lose, { $0.lose }) }
-        else { pool = lines(Lines.push, { $0.push }) }
+        if s.blackjacks > 0 { pool = lines(Lines.blackjack, event: "blackjack") }
+        else if s.net > 0 { pool = lines(Lines.win, event: "win") }
+        else if s.busted { pool = lines(Lines.bust, event: "bust") }
+        else if s.net < 0 { pool = balance < 100 ? lines(Lines.broke, event: "broke") : lines(Lines.lose, event: "lose") }
+        else { pool = lines(Lines.push, event: "push") }
         // Gebucht ist sofort; Anzeige und Kommentar erst, wenn der Dealer aufgedeckt hat.
         heldCredit = s.credit
         pendingLine = pool.randomElement()
@@ -1645,9 +1777,10 @@ private struct TableScreen: View {
     }
 
     /// Spruch-Pool: Standard oder – falls aktiv und vorhanden – der alternative Satz.
-    private func lines(_ normal: [String], _ night: (Lines.Night) -> [String]) -> [String] {
-        if afterDark, let set = Lines.night { return night(set) }
-        return normal
+    private func lines(_ normal: [String], event: String) -> [String] {
+        guard afterDark, let set = Lines.night else { return normal }
+        let pool = set.pool(event: event, character: venue.lady.name, repeatedTips: tipStreak >= 3)
+        return pool.isEmpty ? normal : pool
     }
 
     /// Ein Tipp auf die Lady = Trinkgeld in Höhe des Tisch-Betrags. Im normalen Modus nimmt
@@ -1655,27 +1788,26 @@ private struct TableScreen: View {
     private func tapLady() {
         guard !isPerformingAction, !game.isAnimating, bubble == nil else { return }
         if !afterDark && tipStreak >= 4 {
-            if game.phase == .betting { game.clearBet() }
+            if game.phase == .betting { setBet(0) }
             let all = available
-            guard all > 0 else { return say(lines(Lines.emptyPockets, { $0.emptyPockets }).randomElement() ?? "") }
+            guard all > 0 else { return say(lines(Lines.emptyPockets, event: "emptyPockets").randomElement() ?? "") }
             tipStreak = 0
             pay(all)
             withAnimation(.easeOut(duration: 0.25)) { greed = all }
             say(Lines.greedy.randomElement() ?? "")
             return
         }
-        guard venue.tip <= available else { return say(lines(Lines.emptyPockets, { $0.emptyPockets }).randomElement() ?? "") }
+        guard venue.tip <= available else { return say(lines(Lines.emptyPockets, event: "emptyPockets").randomElement() ?? "") }
         tipStreak += 1
         pay(venue.tip)
-        let night = afterDark ? Lines.night : nil
-        say(tipBag.next(night.map { $0.tips + ($0.signatures[venue.lady.name] ?? []) } ?? Lines.tips))
+        say(tipBag.next(lines(Lines.tips, event: "tips")))
     }
 
     private func pay(_ amount: Int) {
         balance -= amount
         tips += 1
         tipTotal += amount
-        if game.phase.isIdle { syncBroke(&balance, &brokeSince) }
+        if game.phase.isIdle && (game.phase != .betting || game.bet == 0) { syncBroke(&balance, &brokeSince) }
     }
 
     #if DEBUG
@@ -1684,7 +1816,7 @@ private struct TableScreen: View {
     private func demoRound() {
         Task {
             try? await Task.sleep(for: .seconds(1))
-            game.addChip(chipValues(for: balance, minBet: venue.minBet).last ?? venue.minBet, limit: balance)
+            addChip(chipValues(for: balance, minBet: venue.minBet).last ?? venue.minBet)
             try? await Task.sleep(for: .seconds(1))
             deal()
             try? await Task.sleep(for: .seconds(2.5))
@@ -2849,7 +2981,7 @@ private struct ChipView: View {
                 .strokeBorder(deep, lineWidth: size * 0.025)
                 .padding(size * 0.24)
             VStack(spacing: -size * 0.02) {
-                Text(value.formatted(.number))
+                Text((Double(value) / 100).formatted(euroFormat))
                     .font(Typo.ui(size * 0.24, .heavy))
                     .minimumScaleFactor(0.4)
                     .lineLimit(1)
@@ -2885,13 +3017,15 @@ private struct ChipTray: View {
     let balance: Int
     let haptics: Bool
     let sounds: Bool
+    let addChip: (Int) -> Void
+    @State private var denominations: [Int] = []
 
     var body: some View {
-        let free = balance - game.bet
+        let free = balance
         HStack(spacing: 10) {
-            ForEach(Array(chipValues(for: balance, minBet: game.minBet).enumerated()), id: \.offset) { index, value in
+            ForEach(Array(denominations.enumerated()), id: \.offset) { index, value in
                 Button {
-                    game.addChip(value, limit: balance)
+                    addChip(value)
                     if sounds { AudioServicesPlaySystemSound(1105) }
                 } label: {
                     ChipView(value: value, tier: index, size: 72)
@@ -2899,7 +3033,7 @@ private struct ChipTray: View {
                 .buttonStyle(PressStyle(scale: 0.88))
                 .disabled(value > free)
                 .opacity(value > free ? 0.35 : 1)
-                .accessibilityLabel("\(value) euro chip")
+                .accessibilityLabel("\(eur(value)) chip").accessibilityIdentifier("chip_\(value)")
             }
         }
         .padding(.horizontal, 12)
@@ -2912,6 +3046,7 @@ private struct ChipTray: View {
                     .fill(.black.opacity(0.25)).padding(5))
         )
         .padding(.horizontal, 10)
+        .onAppear { denominations = chipValues(for: balance + game.bet, minBet: game.minBet) }
         .sensoryFeedback(.impact(weight: .light), trigger: game.bet) { _, _ in haptics }
     }
 }
@@ -2985,7 +3120,8 @@ private struct BalancePill: View {
         .padding(.trailing, 14)
         .padding(.vertical, 6)
         .background(.black.opacity(0.55), in: Capsule())
-        .accessibilityLabel("Balance \(eur(balance))")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Balance \(eur(balance))").accessibilityIdentifier("bankroll")
     }
 }
 
@@ -3003,38 +3139,42 @@ private struct ChipIcon: View {
 
 /// Kompakter Status: laufender Cooldown oder Tages-Status des Pleiteschutzes.
 private struct ProtectionPill: View {
+    @AppStorage(Key.afterDark) private var afterDark = false
     @AppStorage(Key.brokeSince) private var brokeSince = 0.0
     @AppStorage(Key.lastRefillDay) private var lastRefillDay = ""
 
     var body: some View {
         let protection = Protection(brokeSince: brokeSince, lastRefillDay: lastRefillDay)
-        Live(dates: protection.changeDates(after: .now)) { now in
-            HStack(spacing: 6) {
-                if let end = protection.cooldownEnd, now < end {
-                    Image(systemName: "timer").foregroundStyle(Palette.gold)
-                    Text(timerInterval: now...end, countsDown: true, showsHours: false)
-                        .monospacedDigit()
-                } else if protection.usedToday(at: now) {
-                    Image(systemName: "shield.slash.fill").foregroundStyle(Palette.lose)
-                    Text("Refill used today")
-                } else if protection.cooldownEnd != nil {
-                    Image(systemName: "shield.checkered").foregroundStyle(Palette.win)
-                    Text("Refill ready")
+        if !afterDark {
+            Live(dates: protection.changeDates(after: .now)) { now in
+                HStack(spacing: 6) {
+                    if let end = protection.cooldownEnd, now < end {
+                        Image(systemName: "timer").foregroundStyle(Palette.gold)
+                        Text(timerInterval: now...end, countsDown: true, showsHours: false)
+                            .monospacedDigit()
+                    } else if protection.usedToday(at: now) {
+                        Image(systemName: "shield.slash.fill").foregroundStyle(Palette.lose)
+                        Text("Refill used today")
+                    } else if protection.cooldownEnd != nil {
+                        Image(systemName: "shield.checkered").foregroundStyle(Palette.win)
+                        Text("Refill ready")
+                    }
                 }
+                .font(Typo.ui(.subheadline, .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.55), in: Capsule())
+                // Nur sichtbar, wenn der Pleiteschutz gerade eine Rolle spielt (Countdown, bereit, heute genutzt).
+                .opacity(protection.cooldownEnd != nil || protection.usedToday(at: now) ? 1 : 0)
             }
-            .font(Typo.ui(.subheadline, .bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.black.opacity(0.55), in: Capsule())
-            // Nur sichtbar, wenn der Pleiteschutz gerade eine Rolle spielt (Countdown, bereit, heute genutzt).
-            .opacity(protection.cooldownEnd != nil || protection.usedToday(at: now) ? 1 : 0)
         }
     }
 }
 
 /// Aufladen-Karte des Pleiteschutzes (Countdown, Tageslimit, +500 €).
 private struct RefillCard: View {
+    @AppStorage(Key.afterDark) private var afterDark = false
     @AppStorage(Key.balance) private var balance = Rules.startBalance
     @AppStorage(Key.brokeSince) private var brokeSince = 0.0
     @AppStorage(Key.lastRefillDay) private var lastRefillDay = ""
@@ -3047,13 +3187,13 @@ private struct RefillCard: View {
             let waiting = end.map { now < $0 } ?? false
 
             VStack(spacing: 10) {
-                Label(balance == 0 ? "Out of chips" : "Bankroll Rescue", systemImage: "shield.lefthalf.filled")
+                Label(balance < 100 ? "Out of chips" : "Bankroll Rescue", systemImage: "shield.lefthalf.filled")
                     .font(Typo.ui(.headline, .bold))
-                    .foregroundStyle(balance == 0 ? Palette.lose : Palette.gold)
+                    .foregroundStyle(balance < 100 ? Palette.lose : Palette.gold)
                 Group {
-                    if balance > 0 {
+                    if balance >= 100 {
                         Text(used ? "Already used today – available again tomorrow."
-                                  : "At €0 a 60-minute timer starts. Then refill +\(eur(Rules.refillAmount)) once per day.")
+                                  : "Below €1 a 30-minute timer starts. Then refill +\(eur(Rules.refillAmount)) once per day.")
                     } else if used {
                         Text("Already used today. You can refill again tomorrow.")
                     } else if waiting, let end {
@@ -3072,7 +3212,7 @@ private struct RefillCard: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .multilineTextAlignment(.center)
 
-                if balance == 0 {
+                if balance < 100 {
                     Button(used ? "Back tomorrow" : (waiting ? "Locked" : "Refill  +\(eur(Rules.refillAmount))")) {
                         refill()
                     }
@@ -3084,23 +3224,77 @@ private struct RefillCard: View {
             .frame(maxWidth: .infinity)
             .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder((balance == 0 ? Palette.lose : Palette.gold).opacity(0.35), lineWidth: 1))
+                .strokeBorder((balance < 100 ? Palette.lose : Palette.gold).opacity(0.35), lineWidth: 1))
         }
     }
 
     private func refill() {
         let now = Date.now
         let protection = Protection(brokeSince: brokeSince, lastRefillDay: lastRefillDay)
-        guard balance == 0, protection.canRefill(at: now) else { return }
-        balance = Rules.refillAmount
+        guard !afterDark, balance < 100, protection.canRefill(at: now) else { return }
+        balance += Rules.refillAmount
         lastRefillDay = dayKey(now)
         brokeSince = 0
+    }
+}
+
+/// After-Dark-Recharge ausschließlich in Profil und Einstellungen.
+private struct NightRechargeCard: View {
+    @AppStorage(Key.afterDark) private var afterDark = false
+    @AppStorage(Key.balance) private var balance = Rules.startBalance
+    @AppStorage(Key.lastNightRecharge) private var lastClaim = 0.0
+    @AppStorage(Key.brokeSince) private var brokeSince = 0.0
+    @AppStorage(Key.highest) private var highest = Rules.startBalance
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var refresh = Date.now
+
+    var body: some View {
+        if afterDark {
+            let recharge = NightRecharge(lastClaim: lastClaim)
+            let dates = recharge.cooldownEnd.map { [$0] } ?? []
+            Live(dates: dates) { now in
+                let waiting = recharge.remaining(at: now) > 0
+                VStack(spacing: 12) {
+                    Label("After Dark Recharge", systemImage: "bolt.fill")
+                        .font(Typo.ui(.headline, .bold)).foregroundStyle(Palette.afterDark)
+                    Text("Manually add +\(eur(Rules.nightRechargeAmount)) in play money every 10 minutes, at any balance. Unused recharges do not accumulate.")
+                        .font(Typo.ui(.subheadline, .regular))
+                        .foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center)
+                    if waiting, let end = recharge.cooldownEnd {
+                        HStack(spacing: 6) {
+                            Text("Ready in")
+                            Text(timerInterval: now...end, countsDown: true, showsHours: false)
+                                .monospacedDigit().fontWeight(.bold)
+                        }
+                        .foregroundStyle(Palette.afterDark)
+                    } else {
+                        Text("Ready to recharge").foregroundStyle(Palette.win)
+                    }
+                    Button("Recharge +\(eur(Rules.nightRechargeAmount))") { claim() }
+                        .buttonStyle(CapsuleStyle(colors: [Palette.afterDark, Palette.purple], ink: .white))
+                        .disabled(waiting)
+                }
+                .padding(16).frame(maxWidth: .infinity)
+                .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Palette.afterDark.opacity(0.4)))
+            }
+            .id(refresh)
+            .onChange(of: scenePhase) { _, phase in if phase == .active { refresh = .now } }
+        }
+    }
+
+    private func claim() {
+        guard NightRecharge.claim(balance: &balance, lastClaim: &lastClaim, afterDark: afterDark, at: .now) else { return }
+        highest = max(highest, balance)
+        syncBroke(&balance, &brokeSince)
     }
 }
 
 // MARK: - Profil
 
 private struct ProfileSheet: View {
+    @AppStorage(Key.proUnlocked) private var proUnlocked = false
+    @AppStorage(Key.afterDark) private var afterDark = false
     @Environment(\.dismiss) private var dismiss
     @AppStorage(Key.balance) private var balance = Rules.startBalance
     @AppStorage(Key.brokeSince) private var brokeSince = 0.0
@@ -3122,6 +3316,8 @@ private struct ProfileSheet: View {
     @AppStorage(Key.deck) private var deck = Deck.standard
     @State private var tab = 0
     @Namespace private var tabSpace
+
+    init(initialTab: Int = 0) { _tab = State(initialValue: initialTab) }
 
     private var stats: Stats {
         Stats(games: games, wins: wins, blackjacks: blackjacks, splits: splits, doubles: doubles, tips: tips,
@@ -3150,7 +3346,7 @@ private struct ProfileSheet: View {
                         }
 
                     HStack(spacing: 0) {
-                        ForEach(Array(["Stats", "Challenges", "Decks", "Bonus"].enumerated()), id: \.offset) { index, title in
+                        ForEach(Array(["Stats", "Challenges", "Decks", afterDark ? "Recharge" : "Bonus"].enumerated()), id: \.offset) { index, title in
                             Button {
                                 withAnimation(.snappy(duration: 0.3)) { tab = index }
                             } label: {
@@ -3181,7 +3377,8 @@ private struct ProfileSheet: View {
                     case 0: statsTab
                     case 1: achievementsTab
                     case 2: decksTab
-                    default: RefillCard()
+                    default:
+                        if afterDark { NightRechargeCard() } else { RefillCard() }
                     }
                 }
                 .padding(20)
@@ -3271,7 +3468,8 @@ private struct ProfileSheet: View {
     private var decksTab: some View {
         HStack(spacing: 12) {
             ForEach(Deck.names.indices, id: \.self) { index in
-                let active = Deck.valid(deck) == index
+                let active = Deck.selected(deck, proUnlocked: proUnlocked) == index
+                let locked = index == Deck.pro && !proUnlocked
                 Button {
                     withAnimation(.snappy) { deck = index }
                 } label: {
@@ -3292,7 +3490,7 @@ private struct ProfileSheet: View {
                         Text(Deck.names[index])
                             .font(Typo.display(19))
                             .foregroundStyle(.white)
-                        Text(active ? "Active" : "Select")
+                        Text(locked ? "Locked" : (active ? "Active" : "Select"))
                             .font(Typo.ui(13, .bold))
                             .foregroundStyle(active ? .white : .black.opacity(0.8))
                             .padding(.horizontal, 14)
@@ -3306,7 +3504,10 @@ private struct ProfileSheet: View {
                         .strokeBorder(active ? Palette.gold : .white.opacity(0.08), lineWidth: active ? 2 : 1))
                 }
                 .buttonStyle(PressStyle())
+                .disabled(locked)
+                .accessibilityHint(locked ? "Discover After Dark to unlock the Pro deck." : "Select this deck.")
                 .accessibilityLabel("\(Deck.names[index]) deck\(active ? ", active" : "")")
+                .accessibilityIdentifier("deck_\(index)")
             }
         }
     }
@@ -3323,6 +3524,7 @@ private struct ProfileSheet: View {
 // MARK: - Optionen
 
 private struct OptionsSheet: View {
+    @AppStorage(Key.afterDark) private var afterDark = false
     @Environment(\.dismiss) private var dismiss
     @AppStorage(Key.standOn21) private var standOn21 = true
     @AppStorage(Key.showValues) private var showValues = true
@@ -3357,6 +3559,8 @@ private struct OptionsSheet: View {
                     }
                     .tint(Palette.gold)
                     .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+                    if afterDark { NightRechargeCard() }
 
                     Button(role: .destructive) { confirmReset = true } label: {
                         Label("Reset Progress", systemImage: "arrow.counterclockwise")
@@ -3413,6 +3617,7 @@ private struct OptionsSheet: View {
 /// Kurze Einblendung beim Umschalten des alternativen Modus.
 private struct ModeToast: View {
     let unlocked: Bool
+    var proReward = false
     let done: () -> Void
     @State private var go = false
 
@@ -3449,6 +3654,12 @@ private struct ModeToast: View {
                     .font(Typo.ui(16, .heavy))
                     .tracking(8)
                     .foregroundStyle(tint)
+                if unlocked && proReward {
+                    Text("PRO DECK UNLOCKED")
+                        .font(Typo.ui(14, .heavy)).tracking(2).foregroundStyle(Palette.gold)
+                    Text("Choose it in Profile → Decks")
+                        .font(Typo.ui(.subheadline, .regular)).foregroundStyle(.white.opacity(0.8))
+                }
             }
             .scaleEffect(go ? 1 : 0.85)
             .opacity(go ? 1 : 0)
@@ -3461,6 +3672,7 @@ private struct ModeToast: View {
             done()
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("modeToast")
     }
 }
 

@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		B1A000000000000000000001 /* BlackJack.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BlackJack.app; sourceTree = BUILT_PRODUCTS_DIR; };
+        B2A000000000000000000001 /* BlackJackUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = BlackJackUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,6 +17,7 @@
 			path = BlackJack;
 			sourceTree = "<group>";
 		};
+        B2A000000000000000000002 /* UITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = UITests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -26,6 +28,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+        B2A000000000000000000003 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -33,6 +36,7 @@
 			isa = PBXGroup;
 			children = (
 				B1A000000000000000000002 /* BlackJack */,
+                B2A000000000000000000002 /* UITests */,
 				B1A000000000000000000005 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +45,7 @@
 			isa = PBXGroup;
 			children = (
 				B1A000000000000000000001 /* BlackJack.app */,
+                B2A000000000000000000001 /* BlackJackUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,7 +75,26 @@
 			productReference = B1A000000000000000000001 /* BlackJack.app */;
 			productType = "com.apple.product-type.application";
 		};
+        B2A000000000000000000006 /* BlackJackUITests */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = B2A000000000000000000007;
+            buildPhases = (B2A000000000000000000008, B2A000000000000000000003, B2A000000000000000000009);
+            buildRules = ();
+            dependencies = (B2A000000000000000000011);
+            fileSystemSynchronizedGroups = (B2A000000000000000000002);
+            name = BlackJackUITests;
+            packageProductDependencies = ();
+            productName = BlackJackUITests;
+            productReference = B2A000000000000000000001;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
 /* End PBXNativeTarget section */
+/* Begin PBXContainerItemProxy section */
+        B2A000000000000000000010 = {isa = PBXContainerItemProxy; containerPortal = B1A00000000000000000000A; proxyType = 1; remoteGlobalIDString = B1A000000000000000000006; remoteInfo = BlackJack; };
+/* End PBXContainerItemProxy section */
+/* Begin PBXTargetDependency section */
+        B2A000000000000000000011 = {isa = PBXTargetDependency; target = B1A000000000000000000006; targetProxy = B2A000000000000000000010; };
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		B1A00000000000000000000A /* Project object */ = {
@@ -99,7 +123,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				B1A000000000000000000006 /* BlackJack */,
+                B1A000000000000000000006 /* BlackJack */,
+                B2A000000000000000000006 /* BlackJackUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -112,6 +137,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+        B2A000000000000000000009 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -122,6 +148,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+        B2A000000000000000000008 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -173,7 +200,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Blackjack;
@@ -185,7 +212,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.BlackJack;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -199,7 +226,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Blackjack;
@@ -211,7 +238,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.BlackJack;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -220,6 +247,32 @@
 			};
 			name = Release;
 		};
+        B2A00000000000000000000C = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                PRODUCT_BUNDLE_IDENTIFIER = com.example.BlackJackUITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 6.0;
+                TARGETED_DEVICE_FAMILY = 1;
+                TEST_TARGET_NAME = BlackJack;
+            };
+            name = Debug;
+        };
+        B2A00000000000000000000D = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                PRODUCT_BUNDLE_IDENTIFIER = com.example.BlackJackUITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 6.0;
+                TARGETED_DEVICE_FAMILY = 1;
+                TEST_TARGET_NAME = BlackJack;
+            };
+            name = Release;
+        };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -241,6 +294,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+        B2A000000000000000000007 = {isa = XCConfigurationList; buildConfigurations = (B2A00000000000000000000C, B2A00000000000000000000D); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 	};
 	rootObject = B1A00000000000000000000A /* Project object */;

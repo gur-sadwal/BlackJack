@@ -9,8 +9,10 @@ some notable things to say:
 * five tables – london, paris, monaco, dubai, las vegas – each with its own level and minimum bet
 * real rules: hit, stand, double down, split up to 4 hands, blackjack pays 3:2, dealer stands on 17
 * double and split only show up when they're actually allowed
-* chips scale with your balance; broke? 60 min cooldown, then +€500 once a day
-* 3 decks: classic, blue and pro (my own zebra / medallion design)
+* familiar chip denominations scale with your bankroll; broke? 30 min cooldown, then +€500 once a day
+* 3 decks: classic, blue (default) and pro (zebra / medallion design, unlocked on discovering After Dark)
+* discover After Dark for cheekier text, the Pro deck and a manual +€1,000 recharge every 10 minutes in Profile / Options
+* chips move from available bankroll into the pot immediately; payouts use cents for accurate 3:2 blackjack
 * no ads, no tracking, no purchases. play money only
 * lightweight app with local save data
 
