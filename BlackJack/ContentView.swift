@@ -1468,20 +1468,24 @@ private struct TableScreen: View {
                 } else {
                     CenterStage(game: game, haptics: haptics)
                 }
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
-                        VStack(spacing: 12) {
-                            DealerRow(game: game, showValue: showValues).id("dealerHand")
-                            PlayerHands(game: game, showValue: showValues).id("playerHand")
+                GeometryReader { geo in
+                    // Karten schrumpfen, bis beide Hände in den Platz passen – sonst scrollt der Dealer oben weg.
+                    let scale = CardFit.scale(for: geo.size.height)
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical) {
+                            VStack(spacing: 12) {
+                                DealerRow(game: game, showValue: showValues, cardWidth: CardFit.dealer * scale).id("dealerHand")
+                                PlayerHands(game: game, showValue: showValues, cardWidth: CardFit.player * scale).id("playerHand")
+                            }
+                            .padding(.vertical, 6)
                         }
-                        .padding(.vertical, 6)
-                    }
-                    .scrollIndicators(.hidden)
-                    .onChange(of: game.phase) { _, phase in
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            if phase == .player { proxy.scrollTo("playerHand", anchor: .bottom) }
-                            if phase == .dealer { proxy.scrollTo("dealerHand", anchor: .top) }
-                            if phase == .finished { proxy.scrollTo("dealerHand", anchor: .top) }
+                        .scrollIndicators(.hidden)
+                        .onChange(of: game.phase) { _, phase in
+                            withAnimation(.easeInOut(duration: 0.4)) {
+                                if phase == .player { proxy.scrollTo("playerHand", anchor: .bottom) }
+                                if phase == .dealer { proxy.scrollTo("dealerHand", anchor: .top) }
+                                if phase == .finished { proxy.scrollTo("dealerHand", anchor: .top) }
+                            }
                         }
                     }
                 }
@@ -2359,15 +2363,29 @@ private struct LadyPortrait: View {
     }
 }
 
+/// Kartengrößen am Tisch: volle Größe, solange Dealer- und Spielerhand untereinander passen.
+private enum CardFit {
+    static let dealer: CGFloat = 104
+    static let player: CGFloat = 120
+    /// Feste Höhen neben den Karten: Abstände, Punkte-Schilder, Hand-Rahmen.
+    private static let chrome: CGFloat = 12 + 12 + 4 + 26 + 44
+
+    static func scale(for height: CGFloat) -> CGFloat {
+        let cards = (dealer + player) * 1.4
+        return min(1, max(0.7, (height - chrome) / cards))
+    }
+}
+
 private struct DealerRow: View {
     let game: Game
     let showValue: Bool
+    let cardWidth: CGFloat
 
     var body: some View {
         let hidden = game.holeHidden && game.dealer.count > 1
         let visible = hidden ? Array(game.dealer.prefix(1)) : game.dealer
         VStack(spacing: 4) {
-            HandView(cards: game.dealer, hideSecond: game.holeHidden, cardWidth: 104,
+            HandView(cards: game.dealer, hideSecond: game.holeHidden, cardWidth: cardWidth,
                      dealFrom: CGSize(width: 150, height: -60))
             ScoreTag(text: visible.isEmpty || !showValue ? nil : Score(visible).text + (hidden ? " + ?" : ""),
                      bust: Score(visible).isBust)
@@ -2440,9 +2458,9 @@ private struct CenterStage: View {
 private struct PlayerHands: View {
     let game: Game
     let showValue: Bool
+    let cardWidth: CGFloat
 
     var body: some View {
-        let cardWidth: CGFloat = 120
         GeometryReader { geo in
             let hands = game.hands
             let column = hands.count > 1 ? max(240, min(320, geo.size.width * 0.72)) : geo.size.width
