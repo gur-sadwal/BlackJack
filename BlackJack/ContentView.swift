@@ -28,6 +28,8 @@ private enum Rules {
     static let refillAmount = 50_000
     static let nightRechargeAmount = 100_000
     static let nightRechargeCooldown: TimeInterval = 10 * 60
+    static let nightFavor = 0.41
+    static let nightFavorDuration: TimeInterval = 2 * 60 * 60
     static let cooldown: TimeInterval = 30 * 60   // Normalmodus: 30 Minuten, einmal täglich
     static let reshuffleBelow = 15                // Neu mischen unter 15 Karten
     static let maxHands = 4                       // bis zu 3× splitten
@@ -61,6 +63,7 @@ private enum Key {
     static let balance = "balance"
     static let reservedBet = "reservedBet"
     static let lastNightRecharge = "lastNightRecharge"
+    static let nightFavorStart = "nightFavorStart"
     static let brokeSince = "brokeSince"
     static let lastRefillDay = "lastRefillDay"
     static let games = "games"
@@ -154,6 +157,20 @@ struct NightRecharge {
         lastClaim = now.timeIntervalSince1970
         balance += Rules.nightRechargeAmount
         return true
+    }
+}
+
+/// Zeitfenster ab der ersten Runde im alternativen Modus, einmal pro Kalendertag.
+struct NightFavor {
+    let start: Double
+
+    func isActive(at now: Date) -> Bool {
+        start > 0 && now.timeIntervalSince1970 - start < Rules.nightFavorDuration
+    }
+
+    static func begin(start: inout Double, at now: Date) {
+        let sameDay = start > 0 && Calendar.current.isDate(Date(timeIntervalSince1970: start), inSameDayAs: now)
+        if !sameDay { start = now.timeIntervalSince1970 }
     }
 }
 
@@ -373,6 +390,8 @@ final class Game {
     private(set) var isAnimating = false
 
     @ObservationIgnored var standOn21 = true
+    /// Wahrscheinlichkeit, eine ungünstige Karte gegen eine passende aus dem Schuh zu tauschen.
+    @ObservationIgnored var favor = 0.0
     /// Bucht das Rundenergebnis, sobald es feststeht (vor der Dealer-Animation).
     @ObservationIgnored var onSettle: ((Settlement) -> Void)?
     @ObservationIgnored private var shoe: [Int] = []
@@ -465,7 +484,8 @@ final class Game {
         guard phase == .player, !isAnimating, hands.indices.contains(active) else { return nil }
         isAnimating = true
         defer { isAnimating = false }
-        withAnimation(dealSpring) { hands[active].cards.append(draw()) }
+        let cards = hands[active].cards
+        withAnimation(dealSpring) { hands[active].cards.append(draw(prefer: { !Score(cards + [$0]).isBust })) }
         await pause(Pacing.card)
         let score = hands[active].score
         if score.isBust || (standOn21 && score.total == 21) { return await advance() }
@@ -486,7 +506,8 @@ final class Game {
         defer { isAnimating = false }
         hands[active].bet *= 2
         hands[active].doubled = true
-        withAnimation(dealSpring) { hands[active].cards.append(draw()) }
+        let cards = hands[active].cards
+        withAnimation(dealSpring) { hands[active].cards.append(draw(prefer: { !Score(cards + [$0]).isBust })) }
         await pause(Pacing.card)
         return await advance()
     }
@@ -523,12 +544,16 @@ final class Game {
         return nextID
     }
 
-    private func draw(counting: Bool = true, alsoInPlay: [Card] = []) -> Card {
+    private func draw(counting: Bool = true, alsoInPlay: [Card] = [], prefer: ((Card) -> Bool)? = nil) -> Card {
         if shoe.isEmpty {                         // Notnagel: nie ohne Karten dastehen
             let inPlay = Set((hands.flatMap(\.cards) + dealer + alsoInPlay).map(\.id))
             shoe = (0..<52).filter { !inPlay.contains($0) }.shuffled()
         }
         if counting { dealtCount &+= 1 }
+        if let prefer, favor > 0, let top = shoe.last, !prefer(Card(id: top)), Double.random(in: 0..<1) < favor,
+           let index = shoe.lastIndex(where: { prefer(Card(id: $0)) }) {
+            shoe.swapAt(index, shoe.count - 1)    // getauscht, nicht erfunden: der Schuh bleibt vollständig
+        }
         return Card(id: shoe.removeLast())
     }
 
@@ -560,7 +585,8 @@ final class Game {
         var final = dealer
         if hands.contains(where: { !$0.score.isBust }) {
             while Score(final).total < 17 {       // Dealer zieht bis 16, steht ab 17
-                final.append(draw(counting: false, alsoInPlay: final))
+                let current = final
+                final.append(draw(counting: false, alsoInPlay: current, prefer: { Score(current + [$0]).isBust }))
             }
         }
         let (settlement, resolved, outcome) = resolve(final)
@@ -1449,6 +1475,7 @@ private struct TableScreen: View {
     @State private var isPerformingAction = false
     @State private var showRecharge = false
     @AppStorage(Key.reservedBet) private var reservedBet = 0
+    @AppStorage(Key.nightFavorStart) private var favorStart = 0.0
 
     init(venue: Venue, leave: @escaping () -> Void) {
         self.venue = venue
@@ -1714,6 +1741,8 @@ private struct TableScreen: View {
         guard game.canDeal else { return }
         run({ await game.deal() }, prepare: {
             reservedBet = 0 // bereits beim Setzen abgebucht; ab jetzt im Spiel
+            if afterDark { NightFavor.begin(start: &favorStart, at: .now) }
+            game.favor = afterDark && NightFavor(start: favorStart).isActive(at: .now) ? Rules.nightFavor : 0
             tipStreak = 0
             if bubble == nil && Int.random(in: 0..<3) == 0 {
                 say(lines(Lines.luck, event: "luck").randomElement() ?? "")

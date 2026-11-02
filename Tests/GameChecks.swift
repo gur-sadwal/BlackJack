@@ -255,6 +255,27 @@ private struct GameChecks {
                 defaults.object(forKey: Key.sounds) as? Bool == false, "A reset must preserve preferences")
         require(defaults.double(forKey: Key.lastNightRecharge) == now.timeIntervalSince1970 && !defaults.bool(forKey: Key.proUnlocked), "Reset relocks Pro but cannot clear recharge cooldown")
         print("PASS: currency migration, restart recovery, cooldown persistence and explicit reset")
+        let favored = Game.fixture([9, 5, 1, 22, 12])   // 10+2 gegen 6+10, oben liegt ein König
+        favored.favor = 1
+        _ = await favored.deal()
+        let afterHit = await favored.hit()       // getauschte Karte kann 21 ergeben und die Hand beenden
+        require(!favored.hands[0].score.isBust, "A favored hit swaps a busting card")
+        let favoredResult = favored.phase == .player ? await favored.stand() : afterHit
+        require(Score(favored.dealer).isBust && favoredResult?.wins == 1, "A favored dealer draw prefers a bust")
+        let dealt = favored.hands[0].cards + favored.dealer
+        require(Set(dealt.map(\.id)).count == dealt.count,
+                "Favored draws keep every card unique")
+        let morning = Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 2, hour: 9))!
+        var favorStart = 0.0
+        NightFavor.begin(start: &favorStart, at: morning)
+        require(NightFavor(start: favorStart).isActive(at: morning.addingTimeInterval(7_199)), "Window is open for two hours")
+        require(!NightFavor(start: favorStart).isActive(at: morning.addingTimeInterval(7_200)), "Window closes after two hours")
+        NightFavor.begin(start: &favorStart, at: morning.addingTimeInterval(10 * 3600))
+        require(favorStart == morning.timeIntervalSince1970, "Later rounds the same day keep the first start")
+        let nextDay = morning.addingTimeInterval(24 * 3600)
+        NightFavor.begin(start: &favorStart, at: nextDay)
+        require(NightFavor(start: favorStart).isActive(at: nextDay), "A new day opens a new window")
+        print("PASS: favored draws and daily window")
         print("All game checks passed.")
     }
 }
