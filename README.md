@@ -48,3 +48,7 @@ Developer notes and optional dialogue format: [docs/DEVELOPMENT.md](docs/DEVELOP
 * build the ipa yourself: `./scripts/build-ipa.sh`
 
 needs ios 26+ (made for iphone 17 / ios 27).
+
+## credits
+
+card and chip sounds: [Casino Audio](https://kenney.nl/assets/casino-audio) by Kenney (CC0).

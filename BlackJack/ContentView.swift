@@ -9,7 +9,7 @@
 //
 
 import SwiftUI
-import AudioToolbox
+import AVFoundation
 import ImageIO
 
 // MARK: - App
@@ -1881,7 +1881,7 @@ private struct TableScreen: View {
     }
 }
 
-/// Unsichtbarer Mini-View: spielt pro gezogener Karte einen Systemklick,
+/// Unsichtbarer Mini-View: spielt Karten-, Umdreh- und Ergebnis-Klänge,
 /// ohne dass der ganze Tisch neu ausgewertet wird.
 private struct SoundTicker: View {
     let game: Game
@@ -1891,9 +1891,142 @@ private struct SoundTicker: View {
         Color.clear
             .frame(width: 0, height: 0)
             .onChange(of: game.dealtCount) {
-                if enabled { AudioServicesPlaySystemSound(1104) }
+                if enabled { SoundBoard.shared.play(.card) }
             }
+            .onChange(of: game.holeHidden) { _, hidden in
+                if enabled && !hidden && game.dealer.count > 1 { SoundBoard.shared.play(.flip) }
+            }
+            .onChange(of: game.outcome?.verdict) { _, verdict in
+                guard enabled, let verdict else { return }
+                switch verdict {
+                case .blackjack: SoundBoard.shared.play(.blackjack)
+                case .win: SoundBoard.shared.play(.win)
+                case .push: SoundBoard.shared.play(.push)
+                case .lose: SoundBoard.shared.play(.lose)
+                }
+            }
+            .onDisappear { SoundBoard.shared.stop() }
             .allowsHitTesting(false)
+    }
+}
+
+/// Karte, Umdrehen und Jeton sind echte Aufnahmen (`Sounds/*.caf`, Kenney „Casino Audio“, CC0,
+/// zusammen ~13 KB); die Ergebnis-Töne werden im Code erzeugt. Im Speicher landen nur Effekte,
+/// die tatsächlich gespielt wurden (zusammen rund 250 KB). Läuft nur am Tisch.
+@MainActor
+private final class SoundBoard {
+    enum Effect { case card, chip, flip, win, blackjack, lose, push }
+
+    static let shared = SoundBoard()
+
+    private let engine = AVAudioEngine()
+    private let voices = (0..<4).map { _ in AVAudioPlayerNode() }
+    private let format = AVAudioFormat(standardFormatWithSampleRate: 22_050, channels: 1)!
+    private var buffers: [Effect: [AVAudioPCMBuffer]] = [:]
+    private var next = 0
+
+    private init() {
+        for voice in voices {
+            engine.attach(voice)
+            engine.connect(voice, to: engine.mainMixerNode, format: format)
+        }
+    }
+
+    func play(_ effect: Effect) {
+        guard start() else { return }
+        let variants = buffers[effect] ?? make(effect)
+        buffers[effect] = variants
+        guard let buffer = variants.randomElement() else { return }   // Varianten: nie zweimal gleich klingen
+        let voice = voices[next]                  // mehrere Stimmen: Chips und Karten dürfen sich überlappen
+        next = (next + 1) % voices.count
+        voice.scheduleBuffer(buffer, at: nil, options: .interrupts)
+        if !voice.isPlaying { voice.play() }
+    }
+
+    func stop() {
+        guard engine.isRunning else { return }
+        engine.stop()
+    }
+
+    private func start() -> Bool {
+        if engine.isRunning { return true }
+        // Ambient: folgt dem Stummschalter und lässt laufende Musik weiterspielen.
+        try? AVAudioSession.sharedInstance().setCategory(.ambient)
+        return (try? engine.start()) != nil
+    }
+
+    // MARK: Klangerzeugung
+
+    private func make(_ effect: Effect) -> [AVAudioPCMBuffer] {
+        switch effect {
+        case .card: return ["card-1", "card-2", "card-3"].compactMap(load)
+        case .flip: return ["flip"].compactMap(load)
+        case .chip: return ["chip-1", "chip-2", "chip-3"].compactMap(load)
+        case .win:                                // C-Dur aufwärts
+            return [chime([(1046.5, 0), (1318.5, 0.08), (1568.0, 0.16)], length: 0.6)]
+        case .blackjack:                          // längerer Lauf mit Oktave obendrauf
+            return [chime([(1046.5, 0), (1318.5, 0.07), (1568.0, 0.14), (2093.0, 0.21), (2637.0, 0.3)], length: 0.9)]
+        case .push:
+            return [chime([(880.0, 0), (1318.5, 0)], length: 0.35, volume: 0.18)]
+        case .lose:                               // zwei weiche Töne abwärts, ohne Glanz
+            return [render(0.55) { t in
+                [(392.0, 0.0), (311.1, 0.14)].reduce(0) { sum, note in
+                    let local = t - note.1
+                    guard local >= 0 else { return sum }
+                    let tone = sin(2 * .pi * note.0 * local) + 0.15 * sin(2 * .pi * note.0 * 2 * local)
+                    return sum + tone * Self.envelope(local, attack: 0.01, decay: 0.16) * 0.3
+                }
+            }]
+        }
+    }
+
+    /// Aufnahme aus dem Bundle, ins Abspielformat (22,05 kHz mono) gewandelt.
+    private func load(_ name: String) -> AVAudioPCMBuffer? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "caf"),
+              let file = try? AVAudioFile(forReading: url),
+              let source = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: source)) != nil else { return nil }
+        if source.format == format { return source }
+        guard let converter = AVAudioConverter(from: source.format, to: format),
+              let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(
+                  Double(source.frameLength) * format.sampleRate / source.format.sampleRate) + 1) else { return nil }
+        var fed = false
+        _ = converter.convert(to: out, error: nil) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true
+            status.pointee = .haveData
+            return source
+        }
+        return out
+    }
+
+    /// Glockenartige Töne (Grundton + Obertöne), jeweils mit eigenem Einsatz in Sekunden.
+    private func chime(_ notes: [(Double, Double)], length: Double, volume: Double = 0.22) -> AVAudioPCMBuffer {
+        render(length) { t in
+            notes.reduce(0) { sum, note in
+                let local = t - note.1
+                guard local >= 0 else { return sum }
+                let f = note.0
+                let tone = sin(2 * .pi * f * local) + 0.3 * sin(2 * .pi * 2 * f * local) + 0.08 * sin(2 * .pi * 3 * f * local)
+                return sum + tone * Self.envelope(local, attack: 0.004, decay: 0.17) * volume
+            }
+        }
+    }
+
+    private func render(_ seconds: Double, _ sample: (Double) -> Double) -> AVAudioPCMBuffer {
+        let rate = format.sampleRate
+        let count = AVAudioFrameCount(seconds * rate)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count)!
+        buffer.frameLength = count
+        let out = buffer.floatChannelData![0]
+        for i in 0..<Int(count) {
+            out[i] = Float(tanh(sample(Double(i) / rate)))   // weich begrenzen statt hart zu clippen
+        }
+        return buffer
+    }
+
+    private static func envelope(_ t: Double, attack: Double, decay: Double) -> Double {
+        t < attack ? t / attack : exp(-(t - attack) / decay)
     }
 }
 
@@ -3073,7 +3206,7 @@ private struct ChipTray: View {
             ForEach(Array(denominations.enumerated()), id: \.offset) { index, value in
                 Button {
                     addChip(value)
-                    if sounds { AudioServicesPlaySystemSound(1105) }
+                    if sounds { SoundBoard.shared.play(.chip) }
                 } label: {
                     ChipView(value: value, tier: index, size: 72)
                 }
